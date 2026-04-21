@@ -52,7 +52,7 @@ class RWKV_TOKENIZER():
             "https://www.modelscope.cn/models/EliwiiKeeya/RWKV-x060-World-1B6-v2.1-20240328-ctx4096/resolve/master/rwkv_vocab_v20230424.txt"
         ]
         temp_dir = tempfile.gettempdir()
-        temp_vocab_path = os.path.join(temp_dir, "mindnlp", "rwkv6")
+        temp_vocab_path = os.path.join(temp_dir, "rwkv_pytorch_vocab")
         temp_vocab = os.path.join(temp_vocab_path, VOCAB_NAME)
 
         if os.path.exists(temp_vocab) and os.path.getsize(temp_vocab) > 0:
