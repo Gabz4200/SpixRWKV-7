@@ -1,14 +1,14 @@
-# Vision-RWKV-7: RWKV-7 vision backbone with bidirectional scanning, Q-Shift,
-#                gated fusion, input-dependent mixing, layer scale,
-#                extra normalization, and multi-scale feature output.
-#
-# Features 1-11: Q-Shift, Bidirectional Scan, Gated Fusion,
-# Flexible Decay, Bounded Exps, Extra LN, Layer Scale, etc.
+# Vision-RWKV-7: RWKV-7 vision backbone with Superpixel Tokenization (diffSLIC),
+# Graph-Based Q-Shift, bidirectional scanning, gated fusion, and multi-scale output.
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional, Sequence, List
+from typing import Tuple, Optional, Sequence
+
+# Import diffSLIC components from the same directory
+from .diffSLIC import DiffSLIC, spixel_upsampling
 
 HEAD_SIZE = 64
 TIME_MIX_EXTRA_DIM = 32
@@ -32,85 +32,100 @@ class Permute(nn.Module):
 
 
 # =====================================================================
-# Helpers
+# Graph-Based Helpers (UPDATED FOR BATCHED GRAPHS)
 # =====================================================================
 
 
-def q_shift_multihead(
-    input,
-    shift_pixel=1,
-    head_dim=HEAD_SIZE,
-    patch_resolution: Tuple[int, int] = (14, 14),
-    with_cls_token=False,
-):
-    """Q-Shift: 4-directional 2D token shift along channel groups.
-    Feature 1 (Vision-RWKV) + Feature 11 (2D local pre-mixer).
-    Ported from VRWKV6 / vrwkv6.py:75-100.
+def build_knn_graph(centroids: torch.Tensor, k: int = 4) -> torch.Tensor:
+    """Builds a K-Nearest Neighbors graph from superpixel centroids.
+    Supports both single [N, 2] and batched [B, N, 2] centroids.
     """
-    B, N, C = input.shape
+    squeeze = False
+    if centroids.dim() == 2:
+        centroids = centroids.unsqueeze(0)
+        squeeze = True
+
+    B, N, _ = centroids.shape
+    centroids = centroids.float()
+    dists = torch.cdist(centroids, centroids)  # [B, N, N]
+
+    # Fill diagonal with inf for each batch independently
+    mask = (
+        torch.eye(N, dtype=torch.bool, device=centroids.device)
+        .unsqueeze(0)
+        .expand(B, -1, -1)
+    )
+    dists = dists.masked_fill(mask, float("inf"))
+
+    _, neighbors = torch.topk(dists, k, dim=2, largest=False)  # [B, N, k]
+
+    if squeeze:
+        neighbors = neighbors.squeeze(0)
+    return neighbors
+
+
+def q_shift_graph_multihead(
+    input: torch.Tensor,
+    neighbors: torch.Tensor,  # [N, K] or [B, N, K]
+    head_dim: int = HEAD_SIZE,
+    with_cls_token: bool = False,
+) -> torch.Tensor:
+    """Graph-based Q-Shift for superpixel or irregular grids.
+    Now fully supports batched graphs [B, N, K] for data-dependent topologies.
+    """
+    B, N_total, C = input.shape
     assert C % head_dim == 0, f"C={C} not divisible by head_dim={head_dim}"
-    assert head_dim % 4 == 0, f"head_dim={head_dim} not divisible by 4"
     n_head = C // head_dim
 
-    cls_tokens = input[:, [-1], :]
+    # Handle unbatched neighbors by expanding to batch size
+    if neighbors.dim() == 2:
+        neighbors = neighbors.unsqueeze(0).expand(B, -1, -1)
+
+    K = neighbors.shape[2]
+    assert head_dim % K == 0, f"head_dim={head_dim} must be divisible by K={K}"
+    group_size = head_dim // K
+
+    cls_tokens = None
     if with_cls_token:
+        cls_tokens = input[:, [-1], :]
         input = input[:, :-1, :]
-        N = N - 1
+        N = N_total - 1
+    else:
+        N = N_total
 
-    # [B, n_head, head_dim, H, W]
-    input = input.transpose(1, 2).reshape(
-        B, n_head, head_dim, patch_resolution[0], patch_resolution[1]
+    assert neighbors.shape[1] == N, (
+        f"neighbors length {neighbors.shape[1]} must match N={N}"
     )
-    _, _, _, H, W = input.shape
 
-    output = torch.zeros_like(input)
-    # Group 0: shift right by 1
-    if shift_pixel < W:
-        output[:, :, 0 : int(head_dim * 1 / 4), :, shift_pixel:W] = input[
-            :, :, 0 : int(head_dim * 1 / 4), :, 0 : W - shift_pixel
-        ]
-    # Group 1: shift left by 1
-    if shift_pixel < W:
-        output[:, :, int(head_dim / 4) : int(head_dim / 2), :, 0 : W - shift_pixel] = (
-            input[:, :, int(head_dim / 4) : int(head_dim / 2), :, shift_pixel:W]
-        )
-    # Group 2: shift down by 1
-    if shift_pixel < H:
-        output[:, :, int(head_dim / 2) : int(head_dim / 4 * 3), shift_pixel:H, :] = (
-            input[
-                :, :, int(head_dim / 2) : int(head_dim / 4 * 3), 0 : H - shift_pixel, :
-            ]
-        )
-    # Group 3: shift up by 1
-    if shift_pixel < H:
-        output[:, :, int(head_dim * 3 / 4) : int(head_dim), 0 : H - shift_pixel, :] = (
-            input[:, :, int(head_dim * 3 / 4) : int(head_dim), shift_pixel:H, :]
+    x = input.view(B, N, n_head, head_dim)
+    output = torch.zeros_like(x)
+    safe_neighbors = neighbors.clamp(min=0)
+
+    for k in range(K):
+        neighbor_idx = safe_neighbors[:, :, k]  # [B, N]
+
+        # Extract the k-th group from x: [B, N, n_head, group_size]
+        x_group = x[:, :, :, k * group_size : (k + 1) * group_size]
+
+        # Expand neighbor_idx for gathering: [B, N, n_head, group_size]
+        idx = (
+            neighbor_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, n_head, group_size)
         )
 
-    output = output.reshape(B, C, N).transpose(1, 2)
+        # Gather features from the neighbors along the sequence dimension (dim=1)
+        gathered_group = torch.gather(x_group, 1, idx)
+
+        # Zero out features from invalid (-1) neighbors
+        valid_k = (neighbors[:, :, k] != -1).view(B, N, 1, 1)
+        gathered_group = gathered_group * valid_k
+
+        # Assign to the k-th group of the output
+        output[:, :, :, k * group_size : (k + 1) * group_size] = gathered_group
+
+    output = output.view(B, N, C)
     if with_cls_token:
         output = torch.cat((output, cls_tokens), dim=1)
     return output
-
-
-def resize_pos_embed(
-    pos_embed, src_shape, dst_shape, mode="bicubic", num_extra_tokens=0
-):
-    """Interpolate 2D positional embedding to different resolution.
-    Ported from AudioRWKV vrwkv6.py:626-667.
-    """
-    src_h, src_w = src_shape
-    dst_h, dst_w = dst_shape
-    if src_h == dst_h and src_w == dst_w:
-        return pos_embed
-    if num_extra_tokens:
-        pos_embed = pos_embed[:, num_extra_tokens:]
-    pos_embed = pos_embed.reshape(1, src_h, src_w, -1).permute(0, 3, 1, 2)
-    pos_embed = F.interpolate(
-        pos_embed, size=(dst_h, dst_w), mode=mode, align_corners=False
-    )
-    pos_embed = pos_embed.permute(0, 2, 3, 1).reshape(1, -1, pos_embed.shape[1])
-    return pos_embed
 
 
 def drop_path(x, drop_prob=0.0, training=False):
@@ -140,15 +155,7 @@ class DropPath(nn.Module):
 
 
 class Vision_RWKV7_Block(nn.Module):
-    """Vision-RWKV-7 block.
-
-    Architecture:
-      ln0(layer0) -> ln1 -> QShift -> input-dependent spatial offsets precompute
-        -> forward scan (1D shift + QShift combined, RWKV-7 delta rule)
-        -> backward scan
-        -> gated fusion -> gamma1 -> att_ln -> +residual
-      -> ln2 -> QShift -> ReLU^2 MLP -> gamma2 -> ffn_ln -> +residual
-    """
+    """Vision-RWKV-7 block adapted for Graph-Based Q-Shift."""
 
     def __init__(
         self,
@@ -175,14 +182,8 @@ class Vision_RWKV7_Block(nn.Module):
         if layer_id == 0:
             self.ln0 = nn.LayerNorm(n_embd)
 
-        # ================================================================
-        # RWKV-7  HEAD-VARIANT PARAMETERS
-        # ================================================================
-        # -- 1D scan-path token shift (core RWKV-7: sx * self.x[h]) --
-        #   [6, D]:  r, w, k, v, a, g  — per-channel lerp with prev token
+        # RWKV-7 HEAD-VARIANT PARAMETERS
         self.x = nn.Parameter(torch.zeros(6, n_embd))
-
-        # -- Q-Shift residual mixing  (static per-head, per-channel) --
         self.time_maa_x = nn.Parameter(torch.zeros(1, 1, n_embd))
         self.time_maa_w = nn.Parameter(torch.zeros(1, 1, n_embd))
         self.time_maa_k = nn.Parameter(torch.zeros(1, 1, n_embd))
@@ -190,59 +191,38 @@ class Vision_RWKV7_Block(nn.Module):
         self.time_maa_r = nn.Parameter(torch.zeros(1, 1, n_embd))
         self.time_maa_g = nn.Parameter(torch.zeros(1, 1, n_embd))
         self.time_maa_a = nn.Parameter(torch.zeros(1, 1, n_embd))
-
-        # -- Input-dependent Q-Shift offset via low-rank MLP --
-        #   w1: [D, 32*6]  →  w2: [6, 32, D]  →  6 dynamic offsets m{w,k,v,r,g,a}
         self.time_maa_w1 = nn.Parameter(torch.zeros(n_embd, TIME_MIX_EXTRA_DIM * 6))
         self.time_maa_w2 = nn.Parameter(torch.zeros(6, TIME_MIX_EXTRA_DIM, n_embd))
 
-        # ================================================================
-        # RWKV-7  DELTA-RULE PARAMETERS
-        # ================================================================
-        # Decay:  w_raw = w0 + tanh(xw @ w1) @ w2
+        # RWKV-7 DELTA-RULE PARAMETERS
         self.w0 = nn.Parameter(torch.zeros(n_embd))
         self.w1 = nn.Parameter(torch.zeros(n_embd, 32))
         self.w2 = nn.Parameter(torch.zeros(32, n_embd))
-
-        # ICLR:  a = sigmoid(a0 + (x_a @ a1) @ a2)
         self.a0 = nn.Parameter(torch.zeros(n_embd))
         self.a1 = nn.Parameter(torch.zeros(n_embd, 32))
         self.a2 = nn.Parameter(torch.zeros(32, n_embd))
-
-        # Value residual:  nu = sigmoid(v0 + (xv @ v1) @ v2)
         if layer_id != 0:
             self.v0 = nn.Parameter(torch.zeros(n_embd))
         self.v1 = nn.Parameter(torch.zeros(n_embd, 32))
         self.v2 = nn.Parameter(torch.zeros(32, n_embd))
-
-        # Output gate:  g = sigmoid(x_g @ g1) @ g2
         self.g1 = nn.Parameter(torch.zeros(n_embd, 32))
         self.g2 = nn.Parameter(torch.zeros(32, n_embd))
-
-        # Removal key (xi)  and  replacement-rate (alpha)
         self.k_k = nn.Parameter(torch.zeros(n_embd))
         self.k_a = nn.Parameter(torch.zeros(n_embd))
-
-        # Bonus (rho):  [n_head, head_size]
         self.r_k = nn.Parameter(torch.zeros(n_head, self.head_size))
 
-        # Linear projections (no bias)
         self.att_receptance = nn.Linear(n_embd, n_embd, bias=False)
         self.att_key = nn.Linear(n_embd, n_embd, bias=False)
         self.att_value = nn.Linear(n_embd, n_embd, bias=False)
         self.att_output = nn.Linear(n_embd, n_embd, bias=False)
-
-        # Per-head group norm  (RWKV-7 uses eps=64e-5)
         self.att_group_norm = nn.GroupNorm(
             n_head, n_embd, eps=self.n_head * 1e-5, affine=True
         )
 
-        # ================================================================
         # Vision-specific additions
-        # ================================================================
-        self.fusion_gate = nn.Linear(n_embd, n_embd, bias=False)  # Feat 3
-        self.att_ln = nn.LayerNorm(n_embd)  # Feat 7
-        self.ffn_ln = nn.LayerNorm(n_embd)  # Feat 7
+        self.fusion_gate = nn.Linear(n_embd, n_embd, bias=False)
+        self.att_ln = nn.LayerNorm(n_embd)
+        self.ffn_ln = nn.LayerNorm(n_embd)
 
         if init_values is not None:
             self.gamma1 = nn.Parameter(init_values * torch.ones(n_embd))
@@ -251,7 +231,6 @@ class Vision_RWKV7_Block(nn.Module):
             self.gamma1 = None
             self.gamma2 = None
 
-        # -- Channel-mix (ReLU^2, 4x expansion) --
         self.ffn_x_k = nn.Parameter(torch.zeros(1, 1, n_embd))
         dim_ffn = 4 * n_embd
         self.ffn_key = nn.Linear(n_embd, dim_ffn, bias=False)
@@ -259,26 +238,18 @@ class Vision_RWKV7_Block(nn.Module):
 
         self._init_weights()
 
-    # -----------------------------------------------------------------
-    # Weight initialization
-    # -----------------------------------------------------------------
     def _init_weights(self):
         with torch.no_grad():
             if self.n_layer <= 1:
-                ratio_0_to_1 = 0.0
-                ratio_1_to_almost0 = 0.5
+                ratio_0_to_1, ratio_1_to_almost0 = 0.0, 0.5
             else:
                 ratio_0_to_1 = self.layer_id / (self.n_layer - 1)
                 ratio_1_to_almost0 = 1.0 - (self.layer_id / self.n_layer)
 
-            # Channel index in [0, 1)
             idx = torch.arange(self.n_embd, dtype=torch.float) / max(self.n_embd - 1, 1)
             ddd = idx.view(1, 1, self.n_embd)
-
-            # RWKV-7 1D token-shift params  (small init, will learn)
             self.x.uniform_(-0.01, 0.01)
 
-            # VRWKV6-style fancy time_maa init
             def fancy_mix(base_pow):
                 return 1.0 - torch.pow(ddd, base_pow)
 
@@ -291,15 +262,12 @@ class Vision_RWKV7_Block(nn.Module):
             self.time_maa_r.copy_(fancy_mix(0.5 * ratio_1_to_almost0))
             self.time_maa_g.copy_(fancy_mix(0.5 * ratio_1_to_almost0))
             self.time_maa_a.copy_(fancy_mix(0.5 * ratio_1_to_almost0))
-
             self.time_maa_w1.uniform_(-1e-4, 1e-4)
             self.time_maa_w2.uniform_(-1e-4, 1e-4)
 
-            # Decay init (Feature 5: flexible range = [-3, ~2])
             decay_speed = -3 + 5 * idx ** (0.7 + 1.3 * ratio_0_to_1)
             self.w0.copy_(decay_speed)
 
-            # Bonus init  (time_faaaa zigzag)
             tmp = torch.zeros(self.n_head, self.head_size)
             for h in range(self.n_head):
                 for n in range(self.head_size):
@@ -319,108 +287,56 @@ class Vision_RWKV7_Block(nn.Module):
             ]:
                 p.uniform_(-1e-4, 1e-4)
 
-    # -----------------------------------------------------------------
-    # Pre-compute spatial residual and input-dependent offsets
-    # -----------------------------------------------------------------
-    def _spatial_prep(self, xn: torch.Tensor, patch_resolution: Tuple[int, int]):
-        """Q-Shift + input-dependent dynamic offsets  (position-only).
-
-        Returns dict with:
-          xx:   [B, N, D]  spatial residual
-          dm:   [6, B, N, D]  dynamic mixing offsets (state-independent)
-        """
+    def _spatial_prep(self, xn: torch.Tensor, neighbors: torch.Tensor):
+        """Graph-based Q-Shift + input-dependent dynamic offsets."""
         B, N, D = xn.shape
-
-        # Q-Shift: 2D spatial residual (Features 1, 11)
-        xs = q_shift_multihead(
+        xs = q_shift_graph_multihead(
             xn,
-            shift_pixel=1,
+            neighbors=neighbors,
             head_dim=self.head_size,
-            patch_resolution=patch_resolution,
             with_cls_token=self.with_cls_token,
         )
-        xx = xs - xn  # [B, N, D]
+        xx = xs - xn
 
-        # Input-dependent dynamic offsets (VRWKV6 jit_func)
-        #   base:   x + xx * time_maa_x
-        #   MLP:    tanh(base @ w1)  ->  split 6 ways  ->  bmm(w2)
-        x_base = xn + xx * self.time_maa_x  # [B, N, D]
-        x_dyn = torch.tanh(x_base @ self.time_maa_w1)  # [B, N, 192]
-        x_dyn = x_dyn.view(B * N, 6, -1).transpose(0, 1)  # [6, B*N, 32]
-        x_dyn = torch.bmm(x_dyn, self.time_maa_w2)  # [6, B*N, D]
-        dm = x_dyn.view(6, B, N, D)  # [6, B, N, D]
-
+        x_base = xn + xx * self.time_maa_x
+        x_dyn = torch.tanh(x_base @ self.time_maa_w1)
+        x_dyn = x_dyn.view(B * N, 6, -1).transpose(0, 1)
+        x_dyn = torch.bmm(x_dyn, self.time_maa_w2)
+        dm = x_dyn.view(6, B, N, D)
         return {"xx": xx, "dm": dm}
 
-    # -----------------------------------------------------------------
-    # RWKV-7 scan over one direction  (both shifts combined)
-    # -----------------------------------------------------------------
-    def _scan(
-        self,
-        xn: torch.Tensor,
-        sp: dict,
-        direction: str,
-        v_first_seq: Optional[torch.Tensor],
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        """RWKV-7 delta-rule recurrence over the 1D sequence.
-
-        For each token combines:
-          - 1D scan shift `sx * self.x[h]`   (original RWKV-7)
-          - Q-Shift residual `xx * (static + dynamic)`  (vision adaptation)
-
-        Args:
-          xn:   [B, N, D]   pre-normed input.
-          sp:   spatial prep dict {xx, dm}.
-          direction: 'forward' | 'backward'.
-          v_first_seq: [B, N, D] values from layer 0 (for Value Residual).
-
-        Returns: (out [B, N, D], v_first_seq [B, N, D]).
-        """
+    def _scan(self, xn, sp, direction, v_first_seq):
         B, N, D = xn.shape
-        Hd = self.n_head
-        S = self.head_size
-        dev = xn.device
-
+        Hd, S, dev = self.n_head, self.head_size, xn.device
         rev = direction == "backward"
 
-        # Explicitly flip the correct sequence dimension for each tensor
         xn_seq = torch.flip(xn, dims=[1]) if rev else xn
         xx_seq = torch.flip(sp["xx"], dims=[1]) if rev else sp["xx"]
-
-        # sp["dm"] is [6, B, N, D], so the sequence dim is 2
         dm_seq = torch.flip(sp["dm"], dims=[2]) if rev else sp["dm"]
+        vf_seq = (
+            torch.flip(v_first_seq, dims=[1])
+            if rev and v_first_seq is not None
+            else v_first_seq
+        )
 
-        vf_seq = None
-        if v_first_seq is not None:
-            # v_first_seq is [B, N, D], so sequence dim is 1
-            vf_seq = torch.flip(v_first_seq, dims=[1]) if rev else v_first_seq
-
-        # Fresh state per direction
         state = torch.zeros(B, Hd, S, S, device=dev)
         state_time = torch.zeros(B, D, device=dev)
 
-        # Pre-extract static mixing params for fast access  [D] each
-        sw = self.time_maa_w.reshape(-1)
-        sk = self.time_maa_k.reshape(-1)
-        sv = self.time_maa_v.reshape(-1)
-        sr = self.time_maa_r.reshape(-1)
-        sg = self.time_maa_g.reshape(-1)
-        sa = self.time_maa_a.reshape(-1)
-        x0, x1, x2, x3, x4, x5 = self.x.unbind(dim=0)  # [D] each
+        sw, sk, sv, sr, sg, sa = [
+            getattr(self, f"time_maa_{m}").reshape(-1)
+            for m in ["w", "k", "v", "r", "g", "a"]
+        ]
+        x0, x1, x2, x3, x4, x5 = self.x.unbind(dim=0)
 
-        outputs = []
-        v_first_list = []
+        outputs, v_first_list = [], []
         for t in range(N):
-            token = xn_seq[:, t, :]  # [B, D]
-            xx_t = xx_seq[:, t, :]  # [B, D]
-            dm_t = dm_seq[:, :, t, :]  # [6, B, D]
+            token, xx_t = xn_seq[:, t, :], xx_seq[:, t, :]
+            dm_t = dm_seq[:, :, t, :]
             dmw, dmk, dmv, dmr, dmg, dma = dm_t.unbind(dim=0)
 
-            # ---- 1D scan shift (core RWKV-7) ----
             sx = state_time - token
             state_time.copy_(token)
 
-            # ---- 6 heads: 1D shift + 2D Q-Shift residual ----
             xw = token + sx * x0 + xx_t * (sw + dmw)
             xk = token + sx * x1 + xx_t * (sk + dmk)
             xv = token + sx * x2 + xx_t * (sv + dmv)
@@ -428,61 +344,44 @@ class Vision_RWKV7_Block(nn.Module):
             xg_in = token + sx * x4 + xx_t * (sg + dmg)
             xa_in = token + sx * x5 + xx_t * (sa + dma)
 
-            # ---- RWKV-7 delta rule ----
-
-            # Decay
             w_raw = self.w0 + torch.tanh(xw @ self.w1) @ self.w2
             w = torch.exp(-0.606531 * torch.sigmoid(w_raw.float()))
 
-            # Projections
-            r = self.att_receptance(xr)
-            k = self.att_key(xk)
-            v = self.att_value(xv)
+            r, k, v = self.att_receptance(xr), self.att_key(xk), self.att_value(xv)
 
-            # Value residual (Feature 9: lerp(v_0, v_l, nu))
             if self.layer_id == 0:
                 vf = v
                 v_first_list.append(vf)
             else:
                 vf = vf_seq[:, t, :] if vf_seq is not None else v
                 vr = self.v0 + (xv @ self.v1) @ self.v2
-                # Paper: lerp(v_0, v_l, nu) = v_0 + (v_l - v_0) * nu
                 v = vf + (v - vf) * torch.sigmoid(vr)
 
-            # ICLR and output gate
             a = torch.sigmoid(self.a0 + (xa_in @ self.a1) @ self.a2)
             g = torch.sigmoid(xg_in @ self.g1) @ self.g2
 
-            # Removal key (kappa_hat)
-            kk = k * self.k_k
-            kk = F.normalize(kk.view(B, Hd, S), dim=-1, p=2.0).view(B, -1)
-
-            # Replacement key (k_tilde)
+            kk = F.normalize((k * self.k_k).view(B, Hd, S), dim=-1, p=2.0).view(B, -1)
             kt = k * (1 + (a - 1) * self.k_a)
 
-            # ---- State update (generalized delta rule) ----
             vk = v.view(B, Hd, S, 1) @ kt.view(B, Hd, 1, S)
             ab = (-kk).view(B, Hd, S, 1) @ (kk * a).view(B, Hd, 1, S)
             state = state * w.view(B, Hd, 1, S) + state @ ab.float() + vk.float()
 
-            # ---- Query ----
-            r_h = r.view(B, Hd, S).unsqueeze(-1)  # [B, H, S, 1]
-            out = (state @ r_h).squeeze(-1)  # [B, H, S]
+            r_h = r.view(B, Hd, S).unsqueeze(-1)
+            out = (state @ r_h).squeeze(-1)
             out = self.att_group_norm(out.flatten(start_dim=1))
 
-            # Bonus term (Must use kt, the replacement key, per RWKV-7 Eq. 20)
+            # BONUS TERM FIX: Uses kt (replacement key) instead of k, per RWKV-7 Eq. 20
             bonus = (
                 (r.view(B, Hd, S) * kt.view(B, Hd, S) * self.r_k.view(Hd, S)).sum(
                     dim=-1, keepdim=True
                 )
                 * v.view(B, Hd, S)
             ).view(B, D)
-
-            out = (out + bonus) * g
-            out = self.att_output(out)
+            out = self.att_output((out + bonus) * g)
             outputs.append(out)
 
-        out = torch.stack(outputs, dim=1)  # [B, N, D]
+        out = torch.stack(outputs, dim=1)
         if rev:
             out = torch.flip(out, dims=[1])
 
@@ -491,59 +390,35 @@ class Vision_RWKV7_Block(nn.Module):
             v_first_out = torch.stack(v_first_list, dim=1)
             if rev:
                 v_first_out = torch.flip(v_first_out, dims=[1])
-
         return out, v_first_out
 
-    # -----------------------------------------------------------------
-    # Forward
-    # -----------------------------------------------------------------
-    def forward(
-        self,
-        x: torch.Tensor,
-        patch_resolution: Tuple[int, int],
-        v_first_fwd: Optional[torch.Tensor] = None,
-        v_first_bwd: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+    def forward(self, x, neighbors, v_first_fwd=None, v_first_bwd=None):
         if self.layer_id == 0:
             x = self.ln0(x)
-
-        # === Time-mix ===
         xn = self.ln1(x)
-
-        # Pre-compute spatial residual + dynamic offsets (position-only)
-        sp = self._spatial_prep(xn, patch_resolution)
-
-        # Gate features from local residual (Feature 10)
+        sp = self._spatial_prep(xn, neighbors)
         x_gate = xn + sp["xx"] * 0.5
 
-        # Bidirectional scans with independent v_first (Features 2, 9)
         out_fwd, vf_fwd = self._scan(xn, sp, "forward", v_first_fwd)
         out_bwd, vf_bwd = self._scan(xn, sp, "backward", v_first_bwd)
 
-        # Gated fusion (Feature 3)
         gate = torch.sigmoid(self.fusion_gate(x_gate))
         att_out = gate * out_fwd + (1 - gate) * out_bwd
-
-        # Layer scale (Feature 8) + extra LN (Feature 7)
         if self.gamma1 is not None:
             att_out = self.gamma1 * att_out
         x = x + self.drop_path(self.att_ln(att_out))
 
-        # === Channel-mix: Q-Shift + ReLU^2 MLP ===
         xn = self.ln2(x)
-        xs = q_shift_multihead(
+        xs = q_shift_graph_multihead(
             xn,
-            shift_pixel=1,
+            neighbors=neighbors,
             head_dim=self.head_size,
-            patch_resolution=patch_resolution,
             with_cls_token=self.with_cls_token,
         )
         xx = xs - xn
         xk = xn + xx * self.ffn_x_k
-
         k = F.relu(self.ffn_key(xk)).pow(2)
         ffn_out = self.ffn_value(k)
-
         if self.gamma2 is not None:
             ffn_out = self.gamma2 * ffn_out
         x = x + self.drop_path(self.ffn_ln(ffn_out))
@@ -552,18 +427,47 @@ class Vision_RWKV7_Block(nn.Module):
 
 
 # =====================================================================
-# Vision_RWKV7   (Backbone)
+# Tokenization + Embedding (UPDATED FOR DYNAMIC K)
+# =====================================================================
+
+
+class SuperpixelEmbedding(nn.Module):
+    """Convert 2D image to superpixel tokens via mask-based aggregation."""
+
+    def __init__(
+        self, in_chans: int, embed_dims: int, num_superpixels: int, mode: str = "hard"
+    ):
+        super().__init__()
+        assert mode in ("hard", "soft"), "mode must be 'hard' or 'soft'"
+        self.num_superpixels = num_superpixels
+        self.mode = mode
+        self.proj = nn.Linear(in_chans, embed_dims)
+        self.norm = nn.LayerNorm(embed_dims)
+
+    def forward(self, x: torch.Tensor, sp_map: torch.Tensor) -> torch.Tensor:
+        B, C, H, W = x.shape
+        # Dynamically infer K to prevent crashes if diffSLIC alters the grid slightly
+        K = sp_map.max().item() + 1
+
+        if self.mode == "hard":
+            K = max(sp_map.max().item() + 1, self.num_superpixels)
+            mask = F.one_hot(sp_map.long(), num_classes=K).permute(0, 3, 1, 2).float()
+        else:
+            mask = sp_map
+            K = mask.shape[1]
+
+        weights = mask / (mask.sum(dim=(2, 3), keepdim=True) + 1e-6)
+        sp_features = torch.einsum("bkhw,bchw->bkc", weights, x)
+        return self.norm(self.proj(sp_features))
+
+
+# =====================================================================
+# Vision_RWKV7 (Backbone)
 # =====================================================================
 
 
 class Vision_RWKV7(nn.Module):
-    """Vision-RWKV-7 backbone for replacing ViT.
-
-    Architecture:
-        PatchEmbed -> +PosEmbed -> [Vision_RWKV7_Block x depth] -> LN -> multi-scale
-
-    Default (tiny):  embed_dims=192, n_head=3, depth=12  (~20M params)
-    """
+    """Vision-RWKV-7 backbone with diffSLIC Superpixel Tokenization and Graph Q-Shift."""
 
     def __init__(
         self,
@@ -576,72 +480,55 @@ class Vision_RWKV7(nn.Module):
         drop_path_rate: float = 0.0,
         init_values: Optional[float] = 1e-5,
         final_norm: bool = True,
-        interpolate_mode: str = "bicubic",
         out_indices: Sequence[int] = (-1,),
         with_cls_token: bool = False,
         output_cls_token: bool = False,
-        shift_pixel: int = 1,
+        num_superpixels: int = 196,
+        diff_slic_iters: int = 5,
     ):
         super().__init__()
         self.embed_dims = embed_dims
         self.num_layers = depth
         self.with_cls_token = with_cls_token
         self.output_cls_token = output_cls_token
-        self.shift_pixel = shift_pixel
 
-        # Patch embedding  Conv2d -> LayerNorm
-        self.patch_embed = nn.Sequential(
-            nn.Conv2d(
-                in_chans,
-                embed_dims,
-                kernel_size=patch_size,
-                stride=patch_size,
-                bias=True,
-            ),
-            Permute(0, 2, 3, 1),
-            nn.LayerNorm(embed_dims),
-            Permute(0, 3, 1, 2),
+        # 1. Differentiable SLIC for dynamic superpixel generation
+        self.diff_slic = DiffSLIC(
+            n_spixels=num_superpixels,
+            n_iter=diff_slic_iters,
+            tau=0.01,
+            candidate_radius=1,
         )
 
-        h = w = img_size // patch_size
-        self.patch_resolution = (h, w)
-        num_patches = h * w
+        # 2. Superpixel Embedding (Mask-based aggregation)
+        self.patch_embed = SuperpixelEmbedding(
+            in_chans, embed_dims, num_superpixels, mode="hard"
+        )
 
-        # Position embedding
-        self.num_extra_tokens = 1 if with_cls_token else 0
-        self.interpolate_mode = interpolate_mode
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dims))
+        # 3. 1D Positional Embedding (Size is K, we add a buffer just in case K varies slightly by aspect ratio)
+        self.max_K = num_superpixels + 16
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.max_K, embed_dims))
 
         if with_cls_token:
             self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dims))
 
-        # Drop-path rates  (stochastic depth, linear schedule)
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
-
-        # Build blocks
-        self.blocks = nn.ModuleList()
-        for i in range(depth):
-            self.blocks.append(
+        self.blocks = nn.ModuleList(
+            [
                 Vision_RWKV7_Block(
-                    n_embd=embed_dims,
-                    n_head=num_heads,
-                    n_layer=depth,
-                    layer_id=i,
-                    drop_path=dpr[i],
-                    init_values=init_values,
-                    with_cls_token=with_cls_token,
+                    embed_dims, num_heads, depth, i, dpr[i], init_values, with_cls_token
                 )
-            )
+                for i in range(depth)
+            ]
+        )
 
-        # Final norm
         self.final_norm = final_norm
         if final_norm:
             self.ln1 = nn.LayerNorm(embed_dims)
 
-        # Resolve out_indices
-        if isinstance(out_indices, int):
-            out_indices = [out_indices]
-        out_indices = list(out_indices)
+        out_indices = (
+            [out_indices] if isinstance(out_indices, int) else list(out_indices)
+        )
         for i, idx in enumerate(out_indices):
             if idx < 0:
                 out_indices[i] = depth + idx
@@ -657,53 +544,135 @@ class Vision_RWKV7(nn.Module):
                 self.cls_token.zero_()
             nn.init.trunc_normal_(self.pos_embed, std=0.02)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, ...]:
-        B = x.shape[0]
+    def forward(self, x: torch.Tensor):
+        B, C, H, W = x.shape
 
-        # Patch embed:  [B, 3, H, W] -> [B, D, H', W']
-        x = self.patch_embed(x)
-        _, D, H, W = x.shape
-        patch_resolution = (H, W)
+        # ---------------------------------------------------------
+        # 1. Generate Superpixels via diffSLIC
+        # ---------------------------------------------------------
+        clst_feats, p2s_assign, _ = self.diff_slic(x)
+        h_s, w_s = clst_feats.shape[-2:]
+        K = h_s * w_s
+        radius = self.diff_slic.candidate_radius
 
-        # Flatten: [B, D, H, W] -> [B, N, D]
-        x = x.flatten(2).transpose(1, 2)
+        # ---------------------------------------------------------
+        # 2. Tokenize & Embed (Mode-dependent logic)
+        # ---------------------------------------------------------
+        if self.patch_embed.mode == "hard":
+            # HARD MODE: Use argmax to get discrete integer labels [B, H, W]
+            neighbor_range = 2 * radius + 1
+            hard_assign = (
+                F.one_hot(p2s_assign.argmax(1), neighbor_range**2)
+                .permute(0, 3, 1, 2)
+                .contiguous()
+                .float()
+            )
+            label_grid = (
+                torch.arange(K, dtype=torch.float, device=x.device)
+                .reshape(1, 1, h_s, w_s)
+                .expand(B, -1, -1, -1)
+            )
 
-        # Position embedding (Feature 4: interpolatable for resolution change)
-        pos_embed = resize_pos_embed(
-            self.pos_embed,
-            self.patch_resolution,
-            patch_resolution,
-            mode=self.interpolate_mode,
-            num_extra_tokens=self.num_extra_tokens,
-        )
-        x = x + pos_embed.to(x.dtype)
+            global_labels = (
+                spixel_upsampling(label_grid, hard_assign, candidate_radius=radius)
+                .squeeze(1)
+                .long()
+            )
+            tokens = self.patch_embed(x, global_labels)
 
-        # CLS token  (post-position, matching VRWKV6)  [Feature 4 sub-feature]
+        else:
+            # SOFT MODE: Bypass argmax! Create one-hot superpixel IDs [1, K, H_s, W_s]
+            spixel_ids = (
+                torch.arange(K, device=x.device)
+                .reshape(1, K, 1, 1)
+                .expand(B, -1, h_s, w_s)
+                .float()
+            )
+
+            # Upsample using the raw local soft assignments (p2s_assign) directly.
+            # Because spixel_ids is one-hot, spixel_upsampling will output a global
+            # soft probability map of shape [B, K, H, W].
+            global_soft_mask = spixel_upsampling(
+                spixel_ids, p2s_assign, candidate_radius=radius
+            )
+
+            tokens = self.patch_embed(x, global_soft_mask)
+
+        # Add 1D positional embedding
+        tokens = tokens + self.pos_embed[:, :K, :]
+
+        # Compute Centroids to build KNN Graph
+        # Note: For soft mode, we use the soft mask to compute weighted centroids
+        if self.patch_embed.mode == "soft":
+            coords = torch.stack(
+                torch.meshgrid(
+                    torch.arange(H, device=x.device),
+                    torch.arange(W, device=x.device),
+                    indexing="ij",
+                ),
+                dim=-1,
+            ).float()
+            # global_soft_mask is [B, K, H, W], coords is [H, W, 2]
+            counts = global_soft_mask.sum(dim=(2, 3), keepdim=True).clamp(min=1e-6)
+            centroids = torch.einsum(
+                "bkhw,hwc->bkc", global_soft_mask, coords
+            ) / counts.squeeze(-1)
+        else:
+            # Hard mode centroid calculation (unchanged)
+            coords = torch.stack(
+                torch.meshgrid(
+                    torch.arange(H, device=x.device),
+                    torch.arange(W, device=x.device),
+                    indexing="ij",
+                ),
+                dim=-1,
+            ).float()
+            one_hot = (
+                F.one_hot(global_labels, num_classes=K).permute(0, 3, 1, 2).float()
+            )
+            counts = one_hot.sum(dim=(2, 3), keepdim=True).clamp(min=1)
+            centroids = torch.einsum(
+                "bkhw,bhwc->bkc", one_hot, coords
+            ) / counts.squeeze(-1)
+
+        # Build Graph
+        neighbors = build_knn_graph(centroids.detach(), k=4)
+
         if self.with_cls_token:
             cls_tokens = self.cls_token.expand(B, -1, -1)
-            x = torch.cat((x, cls_tokens), dim=1)
+            tokens = torch.cat((tokens, cls_tokens), dim=1)
 
-        # Blocks with multi-scale output
+        # ---------------------------------------------------------
+        # 3. RWKV-7 Blocks (Unchanged)
+        # ---------------------------------------------------------
         outs = []
         vf_fwd, vf_bwd = None, None
         for i, block in enumerate(self.blocks):
-            x, vff, vfb = block(x, patch_resolution, vf_fwd, vf_bwd)
+            tokens, vff, vfb = block(tokens, neighbors, vf_fwd, vf_bwd)
             if i == 0:
                 vf_fwd, vf_bwd = vff, vfb
-
             if i == len(self.blocks) - 1 and self.final_norm:
-                x = self.ln1(x)
+                tokens = self.ln1(tokens)
 
             if i in self.out_indices:
-                if self.with_cls_token:
-                    patch_tokens = x[:, :-1]
-                    cls_out = x[:, -1]
-                else:
-                    patch_tokens = x
-                    cls_out = None
+                patch_tokens = tokens[:, :-1] if self.with_cls_token else tokens
+                cls_out = tokens[:, -1] if self.with_cls_token else None
 
-                # [B, N, D] -> [B, D, H, W]
-                feat = patch_tokens.reshape(B, H, W, D).permute(0, 3, 1, 2)
+                # SCATTER BACK TO GRID
+                if self.patch_embed.mode == "soft":
+                    # For soft mode, we scatter using the soft mask (weighted sum of tokens)
+                    # patch_tokens is [B, K, D], global_soft_mask is [B, K, H, W]
+                    feat = torch.einsum(
+                        "bkd,bkhw->bhwd", patch_tokens, global_soft_mask
+                    )
+                    feat = feat.permute(0, 3, 1, 2)  # [B, D, H, W]
+                else:
+                    # For hard mode, we gather using the hard labels
+                    feat = patch_tokens.gather(
+                        1,
+                        global_labels.view(B, H * W, 1).expand(-1, -1, self.embed_dims),
+                    )
+                    feat = feat.view(B, H, W, self.embed_dims).permute(0, 3, 1, 2)
 
                 if self.output_cls_token and cls_out is not None:
                     outs.append((feat, cls_out))
