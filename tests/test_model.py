@@ -399,3 +399,144 @@ def test_deterministic_behavior():
             assert torch.allclose(o1[1], o2[1], atol=1e-5)
         else:
             assert torch.allclose(o1, o2, atol=1e-5)
+
+
+# =====================================================================
+# Behavioral Tests (Coverage Expansion)
+# =====================================================================
+
+
+def test_forward_finite_random_input():
+    """Forward pass with random input produces all-finite outputs."""
+    model = Vision_RWKV7(
+        img_size=64,
+        embed_dims=64,
+        num_heads=1,
+        depth=2,
+        num_superpixels=16,
+        diff_slic_iters=2,
+    )
+    x = torch.randn(2, 3, 64, 64)  # batch=2
+    outs = model(x)
+    assert all(torch.isfinite(o).all() for o in outs)
+    assert len(outs) == 1  # default out_indices
+
+
+def test_scatter_output_spatial_shape():
+    """Scatter-to-original-resolution works regardless of img_size parameter."""
+    model = Vision_RWKV7(
+        img_size=64,
+        embed_dims=64,
+        num_heads=1,
+        depth=2,
+        num_superpixels=16,
+    )
+    x = torch.randn(1, 3, 128, 128)  # different from img_size
+    outs = model(x)
+    assert outs[0].shape == (1, 64, 128, 128)
+
+
+def test_multi_scale_output_count():
+    """Correct number of outputs for multiple out_indices."""
+    depth = 4
+    model = Vision_RWKV7(
+        img_size=64,
+        embed_dims=64,
+        num_heads=1,
+        depth=depth,
+        num_superpixels=16,
+        out_indices=[0, 2, 3],
+    )
+    x = torch.randn(1, 3, 64, 64)
+    outs = model(x)
+    assert len(outs) == 3
+    assert outs[0].shape == (1, 64, 64, 64)
+    assert outs[1].shape == (1, 64, 64, 64)
+    assert outs[2].shape == (1, 64, 64, 64)
+
+
+def test_cls_token_output_shape():
+    """CLS token output has correct shape when enabled."""
+    model = Vision_RWKV7(
+        img_size=64,
+        embed_dims=64,
+        num_heads=1,
+        depth=2,
+        num_superpixels=16,
+        with_cls_token=True,
+        output_cls_token=True,
+    )
+    x = torch.randn(1, 3, 64, 64)
+    outs = model(x)
+    assert isinstance(outs[0], tuple)
+    assert outs[0][0].shape == (1, 64, 64, 64)  # feature map
+    assert outs[0][1].shape == (1, 64)  # cls token
+
+
+def test_non_square_input():
+    """Model handles non-square input resolutions."""
+    # Use num_superpixels=8 with H=48,W=96 so diffSLIC's grid shape
+    # (h_s=2, w_s=4) gives K=8, matching the configured num_superpixels.
+    model = Vision_RWKV7(
+        img_size=64,
+        embed_dims=64,
+        num_heads=1,
+        depth=2,
+        num_superpixels=8,
+    )
+    x = torch.randn(1, 3, 48, 96)  # non-square
+    outs = model(x)
+    assert outs[0].shape == (1, 64, 48, 96)
+    assert torch.isfinite(outs[0]).all()
+
+
+def test_minimal_depth():
+    """Model with depth=1 and small config produces finite output."""
+    # HEAD_SIZE=64, so embed_dims must be >= HEAD_SIZE * n_head = 64
+    model = Vision_RWKV7(
+        img_size=32,
+        embed_dims=64,
+        num_heads=1,
+        depth=1,
+        num_superpixels=4,
+        diff_slic_iters=1,
+    )
+    x = torch.randn(1, 3, 32, 32)
+    outs = model(x)
+    assert len(outs) == 1
+    assert torch.isfinite(outs[0]).all()
+
+
+def test_gradient_flow_end_to_end():
+    """Gradients flow back to the input tensor."""
+    # HEAD_SIZE=64, so embed_dims must be >= HEAD_SIZE * n_head = 64
+    model = Vision_RWKV7(
+        img_size=32,
+        embed_dims=64,
+        num_heads=1,
+        depth=1,
+        num_superpixels=4,
+        diff_slic_iters=1,
+    )
+    x = torch.randn(1, 3, 32, 32, requires_grad=True)
+    outs = model(x)
+    loss = outs[0].sum()
+    loss.backward()
+    assert x.grad is not None
+    assert torch.isfinite(x.grad).all()
+
+
+def test_deterministic_across_calls():
+    """Same input produces same output across multiple forward calls."""
+    model = Vision_RWKV7(
+        img_size=64,
+        embed_dims=64,
+        num_heads=1,
+        depth=2,
+        num_superpixels=16,
+    )
+    x = torch.randn(1, 3, 64, 64)
+    out1 = model(x)
+    out2 = model(x)
+    for o1, o2 in zip(out1, out2):
+        assert torch.allclose(o1, o2, atol=1e-5)

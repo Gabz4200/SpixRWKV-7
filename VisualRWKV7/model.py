@@ -1,7 +1,6 @@
 # Vision-RWKV-7: RWKV-7 vision backbone with Superpixel Tokenization (diffSLIC),
 # Graph-Based Q-Shift, bidirectional scanning, gated fusion, and multi-scale output.
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,24 +11,6 @@ from .diffSLIC import DiffSLIC, spixel_upsampling
 
 HEAD_SIZE = 64
 TIME_MIX_EXTRA_DIM = 32
-
-# =====================================================================
-# Utility modules
-# =====================================================================
-
-
-class Permute(nn.Module):
-    """Channel-permute layer (compat for nn.Permute)."""
-
-    __slots__ = ("dims",)
-
-    def __init__(self, *dims: int):
-        super().__init__()
-        self.dims = dims
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x.permute(*self.dims)
-
 
 # =====================================================================
 # Graph-Based Helpers (UPDATED FOR BATCHED GRAPHS)
@@ -472,7 +453,6 @@ class Vision_RWKV7(nn.Module):
     def __init__(
         self,
         img_size: int = 224,
-        patch_size: int = 16,
         in_chans: int = 3,
         embed_dims: int = 192,
         num_heads: int = 3,
@@ -498,6 +478,7 @@ class Vision_RWKV7(nn.Module):
             n_iter=diff_slic_iters,
             tau=0.01,
             candidate_radius=1,
+            stable=True,
         )
 
         # 2. Superpixel Embedding (Mask-based aggregation)
@@ -550,7 +531,7 @@ class Vision_RWKV7(nn.Module):
         # ---------------------------------------------------------
         # 1. Generate Superpixels via diffSLIC (5D Spatio-Color Space)
         # ---------------------------------------------------------
-        # Cria uma grade espacial XY normalizada entre -1 e 1
+        # Create normalized XY spatial grid in [-1, 1]
         grid_y, grid_x = torch.meshgrid(
             torch.linspace(-1, 1, H, device=x.device),
             torch.linspace(-1, 1, W, device=x.device),
@@ -558,11 +539,11 @@ class Vision_RWKV7(nn.Module):
         )
         coords = torch.stack([grid_x, grid_y], dim=0).unsqueeze(0).expand(B, -1, -1, -1)
 
-        # Mapeia RGB de [0, 1] para [-1, 1] para evitar divisão por zero no L2 norm do fundo preto
+        # Map RGB from [0, 1] to [-1, 1] to avoid zero-norm division on black backgrounds
         x_scaled = x * 2.0 - 1.0
 
-        # Concatena Cor (3) + Espaço (2) = 5 Dimensões.
-        # Multiplicador 0.5 em coords prioriza as bordas de cor sobre a rigidez da grade.
+        # Concatenate Color (3) + Space (2) = 5 dimensions.
+        # 0.5 multiplier on coords biases toward color edges over grid rigidity.
         slic_input = torch.cat([x_scaled, coords * 0.5], dim=1)
 
         clst_feats, p2s_assign, _ = self.diff_slic(slic_input)

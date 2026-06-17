@@ -195,9 +195,10 @@ def compute_elem_to_center_assignment(
         similarities, (height, width), kernel_size=stride, stride=stride
     )
     similarities = similarities.reshape(batch_size, neighbor_range**2, height, width)
-    # masking zero padding regions with -inf
+    # mask zero padding regions with -1e9 (finite to avoid NaN from softmax(all -inf))
     # by using the fact that the inner product is zero.
-    similarities = torch.where(similarities == 0, -torch.inf, similarities)
+    FILLER = -1e9
+    similarities = torch.where(similarities == 0, FILLER, similarities)
     if stable:
         similarities = similarities - similarities.max(1, keepdim=True).values.detach()
     soft_assignment = (similarities / tau).softmax(1)
@@ -241,7 +242,8 @@ def compute_center_to_elem_assignment(
     )
     unfold_elem_feats = unfold_elem_feats.reshape(b, c, n_candidate_pixels, h, w)
     similarities = torch.einsum("bcphw,bchw->bphw", (unfold_elem_feats, clst_feats))
-    similarities = torch.where(similarities == 0, -torch.inf, similarities)
+    FILLER = -1e9
+    similarities = torch.where(similarities == 0, FILLER, similarities)
     if stable:
         similarities = similarities - similarities.max(1, keepdim=True).values.detach()
     soft_assignemnt = torch.softmax(similarities / tau, dim=1)
@@ -287,7 +289,8 @@ def update_clst_feats(
     )
     unfold_elem_feats = unfold_elem_feats.reshape(b, c, n_candidate_pixels, h, w)
     similarities = torch.einsum("bcphw,bchw->bphw", (unfold_elem_feats, clst_feats))
-    similarities = torch.where(similarities == 0, -torch.inf, similarities)
+    FILLER = -1e9
+    similarities = torch.where(similarities == 0, FILLER, similarities)
     if stable:
         similarities = similarities - similarities.max(1, keepdim=True).values.detach()
     soft_assignemnt = torch.softmax(similarities / tau, dim=1)
@@ -361,8 +364,8 @@ class DiffSLIC(nn.Module):
             stride = ((height + height_s) // height_s, (width + width_s) // width_s)
         # normalize feature vectors so that their l2-norm is 1
         if self.normalize:
-            x = x / x.norm(dim=1, keepdim=True)
-            clst_feats = clst_feats / clst_feats.norm(dim=1, keepdim=True)
+            x = x / x.norm(dim=1, keepdim=True).clamp(min=1e-8)
+            clst_feats = clst_feats / clst_feats.norm(dim=1, keepdim=True).clamp(min=1e-8)
         # padding an image feature so that its height and width are divisible by stride values
         pad_x = (width_s - width % width_s) % width_s
         pad_y = (height_s - height % height_s) % height_s
@@ -374,7 +377,7 @@ class DiffSLIC(nn.Module):
                 x, clst_feats, stride, self.tau, self.candidate_radius
             )
             if self.normalize:
-                clst_feats = clst_feats / clst_feats.norm(dim=1, keepdim=True)
+                clst_feats = clst_feats / clst_feats.norm(dim=1, keepdim=True).clamp(min=1e-8)
         # compute a pixel-to-superpixel assignment
         p2s_assign, _ = compute_elem_to_center_assignment(
             clst_feats, x, stride, self.tau, self.candidate_radius

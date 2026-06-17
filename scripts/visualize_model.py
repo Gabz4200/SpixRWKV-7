@@ -213,7 +213,7 @@ if __name__ == "__main__":
     ax4 = fig.add_subplot(gs[1, :])  # Spans the whole bottom row
 
     print("Generating Superpixel & Graph Visualization...")
-    # Redimensiona para 224x224 ANTES de enviar para os superpixels, combinando com a escala do modelo
+    # Resize to 224x224 to match model's expected input scale
     img_resized_tensor = F.interpolate(
         img_tensor, size=(224, 224), mode="bilinear", align_corners=False
     )
@@ -259,17 +259,6 @@ if __name__ == "__main__":
         ax.axis("off")
 
     print("Generating Q-Shift Mechanics Visualization...")
-    visualize_q_shift_mechanics(
-        [
-            fig.add_subplot(gs[1, 0]),
-            fig.add_subplot(gs[1, 1]),
-            fig.add_subplot(gs[1, 2]),
-            fig.add_subplot(gs[1, 3] if False else gs[1, 2]),
-        ]
-    )
-    # Note: Adjusted to fit 3 columns. Let's do a clean 2x2 for Q-shift in the bottom row.
-
-    # Redoing bottom row for clean Q-shift viz
     ax_q1 = fig.add_subplot(gs[1, 0])
     ax_q2 = fig.add_subplot(gs[1, 1])
     ax_q3 = fig.add_subplot(gs[1, 2])
@@ -322,7 +311,7 @@ if __name__ == "__main__":
         fontweight="bold",
         y=0.995,
     )
-    # Ajuste manual preciso para evitar sobreposição
+    # Precise manual adjustment to avoid overlap
     plt.subplots_adjust(
         top=0.88, bottom=0.08, left=0.05, right=0.95, hspace=0.35, wspace=0.25
     )
