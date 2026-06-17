@@ -112,4 +112,4 @@ This project is licensed under the **Apache 2.0 License** – see the [LICENSE](
 
 ---
 
-_Built with ❤️ for efficient, scalable, and adaptive computer vision._
+_Built with ❤️ for learning about efficient, scalable, and adaptive computer vision._
