@@ -7,22 +7,29 @@ This file is for AI coding agents. It supplements `CONTRIBUTING.md` with rules s
 | Action | Command |
 |--------|---------|
 | Install deps | `uv sync` |
-| Run all tests | `uv run pytest test_model.py -v` |
-| Run one test | `uv run pytest test_model.py::TEST_NAME -v` |
+| Run all tests | `uv run pytest` |
+| Run one test file | `uv run pytest tests/test_model.py -v` |
 | Run demo | `uv run python main.py` |
-| Run with warnings | `uv run pytest test_model.py -v -W all` |
+| Run with warnings | `uv run pytest -v -W all` |
 
 ## Key Architecture Facts for Agents
 
-- **Single-file model**: Everything is in `model.py`. There are no separate encoder/decoder or layer files.
+- **Modular package**: The model is organized under the `VisualRWKV7/` package.
+- **Core components**:
+    - `VisualRWKV7/model.py`: Backbone and block definitions.
+    - `VisualRWKV7/diffSLIC.py`: Differentiable superpixel tokenization.
+    - `VisualRWKV7/utils/`: Modularized utilities (colors, gamut, graph, data).
 - **No training code**: This repo is inference-only. No optimizers, dataloaders, or training loops.
-- **Three public symbols**: `Vision_RWKV7` (backbone), `Vision_RWKV7_Block` (block), `q_shift_multihead` (shift function). Do not rename or change their signatures without updating all callers.
+- **Public symbols**: `Vision_RWKV7` (backbone), `Vision_RWKV7_Block` (block), `q_shift_graph_multihead` (shift function). Do not rename or change their signatures without updating all callers.
 - **Device-agnostic**: All tensors operate on whatever device they are placed on. Never add `.cuda()` or `.cpu()` calls.
 - **HEAD_SIZE = 64** (constant). `TIME_MIX_EXTRA_DIM = 32`.
 - **Block init is stateful**: `Vision_RWKV7_Block._init_weights()` depends on `layer_id` and `n_layer` — blocks are NOT identical clones.
 - **Backward scan mirror**: `_scan(direction='backward')` flips the sequence, runs the same RWKV-7 recurrence, and flips the output. State is NOT shared between directions.
-- **Test patterns**: Tests use small configs (`embed_dims=64`, `depth=2`). Each test function tests one invariant. Tests import from `model` directly, never from `main`.
+- **Test patterns**: Tests use small configs (`embed_dims=64`, `depth=2`). Each test function tests one invariant.
 - **pytest only**: No other test runner. No doctests, no unittest.TestCase.
+- **Numerical Stability**: Use `torch.clamp(var, min=0.0)` before `sqrt` in stats and `1e-8` clamping for L2 norms to prevent NaNs.
+- **OkLAB Support**: Native support for perceptual color space via `VisualRWKV7/utils/colors.py`.
+- **LSP Compliance**: Always `assert x.grad is not None` before checking finiteness in tests to satisfy Pyright.
 
 ## AI Contribution Policy
 
@@ -55,9 +62,10 @@ This file is for AI coding agents. It supplements `CONTRIBUTING.md` with rules s
 
 ## Mandatory Checks Before PR
 
-- [ ] `uv run pytest test_model.py -v` passes.
+- [ ] `uv run pytest` passes all 79+ tests.
 - [ ] `uv run python main.py` runs without errors and prints `All outputs finite: True`.
 - [ ] No `print()` debug statements, `import pdb`, or `breakpoint()` calls remain.
 - [ ] All new functions/classes have type annotations and a docstring.
 - [ ] Any new `nn.Parameter` has a comment explaining its role and the formula it participates in.
-- [ ] If the PR touches `model.py`, verify that the model still produces deterministic output for identical inputs.
+- [ ] If the PR touches `VisualRWKV7/`, verify that the model still produces deterministic output for identical inputs.
+- [ ] LSP diagnostics (`lsp diagnostics "*"`) report 0 errors.

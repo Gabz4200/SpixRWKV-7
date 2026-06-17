@@ -9,9 +9,11 @@ This architecture merges the linear-complexity, constant-memory advantages of th
 ## Key Features
 
 - **Differentiable Superpixel Tokenization**: Replaces rigid patch grids with `diffSLIC`, supporting both **hard** (discrete) and **soft** (continuous, fully differentiable) aggregation modes.
+- **Perceptual Color Space Support**: Native, fully differentiable support for the **OkLAB** color space, including sRGB/Linear RGB conversions and robust **Gamut Clipping** methods.
 - **Graph-Based Q-Shift**: Adapts the original 2D grid Q-Shift to operate on K-Nearest Neighbor (KNN) graphs, allowing spatial mixing to dynamically adapt to irregular superpixel topologies.
 - **Bidirectional Scanning (Bi-WKV)**: Processes the token sequence in both forward and backward directions, fusing them via a dynamic gating mechanism to capture full global context with $O(N)$ complexity.
-- **Scatter-Back-to-Grid**: Automatically maps the irregular sequence of superpixel tokens back to a dense `[B, C, H, W]` tensor at the output, ensuring seamless compatibility with standard downstream dense prediction heads (e.g., UperNet, Mask R-CNN).
+- **Scatter-Back-to-Grid**: Automatically maps the irregular sequence of superpixel tokens back to a dense `[B, C, H, W]` tensor at the output, ensuring seamless compatibility with downstream dense prediction heads.
+- **Robust Data Utilities**: Includes tools for calculating dataset-wide mean/std statistics and stable image loading with resolution interpolation.
 - **RWKV-7 Stability**: Inherits RWKV-7's generalized delta rule, flexible decay, bounded exponentials, value residuals, and Layer Scale for robust, scalable training.
 
 ## Installation
@@ -39,6 +41,7 @@ You can instantiate the backbone and run a forward pass with just a few lines of
 ```python
 import torch
 from VisualRWKV7.model import Vision_RWKV7
+from VisualRWKV7.utils.data import load_image_to_tensor
 
 # Initialize the model
 model = Vision_RWKV7(
@@ -52,8 +55,13 @@ model = Vision_RWKV7(
     out_indices=[3, 5, 7, 11] # Multi-scale feature extraction
 )
 
-# Dummy input: [Batch, Channels, Height, Width]
-x = torch.randn(2, 3, 224, 224)
+# Load and preprocess an image (supports OkLAB conversion)
+x = load_image_to_tensor(
+    "path/to/image.jpg", 
+    target_size=(224, 224), 
+    color_space="oklab", 
+    normalize=True
+)
 
 # Forward pass
 outs = model(x)
@@ -62,36 +70,48 @@ print(f"Input shape:  {tuple(x.shape)}")
 print(f"Output levels: {len(outs)}")
 for i, o in enumerate(outs):
     print(f"  Level {i} shape: {tuple(o.shape)}")
-    # Note: Outputs are scattered back to [B, C, H, W]!
 ```
 
 ## Testing
 
-The repository includes a comprehensive test suite to verify the mathematical correctness of the graph shifts, superpixel embedding, and RWKV-7 delta rule mechanics.
+The repository includes a comprehensive test suite covering color conversions, dataset utilities, diffSLIC mechanics, and model invariants.
 
-Run the tests using `pytest`:
+Run the full test suite using `pytest`:
 
 ```bash
-export PYTHONPATH=.
-pytest tests/test_model.py -v
+uv run pytest -v
 ```
 
 **Expected Output:**
 
 ```text
-========================= 12 passed in X.XXs =========================
+tests/test_colors.py ....................                                [ 25%]
+tests/test_dataload.py ............                                      [ 40%]
+tests/test_diffSlic.py .............                                     [ 56%]
+tests/test_model.py ...........................                          [ 91%]
+tests/test_regression.py .......                                         [100%]
+========================= 79 passed in X.XXs =========================
 ```
 
 ## Architecture Overview
 
-1. **Tokenization (`diffSLIC`)**: The input image is processed by `DiffSLIC` to generate soft or hard superpixel assignments.
-2. **Embedding**: Pixels are aggregated into superpixel tokens via weighted mean pooling (`SuperpixelEmbedding`).
-3. **Graph Construction**: Centroids of the generated superpixels are used to build a batched K-NN graph (`build_knn_graph`).
-4. **Vision-RWKV-7 Blocks**:
+1. **Preprocessing**: Optional conversion from sRGB to OkLAB perceptual color space and normalization using dataset-wide statistics.
+2. **Tokenization (`diffSLIC`)**: The input image is processed by `DiffSLIC` to generate soft or hard superpixel assignments.
+3. **Embedding**: Pixels are aggregated into superpixel tokens via weighted mean pooling (`SuperpixelEmbedding`).
+4. **Graph Construction**: Centroids of the generated superpixels are used to build a batched K-NN graph (`build_knn_graph`).
+5. **Vision-RWKV-7 Blocks**:
    - **Graph Q-Shift**: Tokens are shifted along graph edges to provide local spatial inductive bias.
    - **Bi-WKV Scan**: Forward and backward recurrent passes compute the generalized delta rule state updates.
    - **Gated Fusion**: Forward and backward outputs are blended using a learned gate.
-5. **Scatter Back**: For multi-scale outputs, tokens are scattered back to their original pixel coordinates using `torch.gather` (hard mode) or `torch.einsum` (soft mode), restoring the `[B, C, H, W]` shape.
+6. **Scatter Back**: For multi-scale outputs, tokens are scattered back to their original pixel coordinates using `torch.gather` (hard mode) or `torch.einsum` (soft mode), restoring the `[B, C, H, W]` shape.
+
+## Utilities
+
+- **`utils/colors.py`**: Differentiable conversions between sRGB, Linear RGB, and OkLAB.
+- **`utils/gamut.py`**: Vectorized OkLAB gamut clipping methods (Chroma preservation, adaptive L0 projection).
+- **`utils/data.py`**: Dataset statistics calculation and robust image loading pipelines.
+- **`utils/graph.py`**: KNN graph construction and multi-head graph-based token shifting.
+- **`utils/drop.py`**: Stochastic depth (DropPath) implementation.
 
 ## References & Inspirations
 

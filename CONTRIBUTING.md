@@ -1,6 +1,6 @@
 # Contributing to Vision-RWKV-7 PyTorch
 
-Vision-RWKV-7 is a vision backbone implemented natively in pure PyTorch, designed as a drop-in replacement for ViT. It adapts the RWKV-7 language model recurrence (delta-rule linear attention with input-dependent decay) to 2D image understanding via bidirectional scanning, Q-Shift spatial token shifting, gated fusion, and multi-scale feature output. The architecture supports interpolatable position embeddings, CLS token variants, and stochastic depth.
+Vision-RWKV-7 is a vision backbone implemented natively in pure PyTorch, designed as a drop-in replacement for ViT. It adapts the RWKV-7 language model recurrence (delta-rule linear attention with input-dependent decay) to 2D image understanding via **Superpixel Tokenization (diffSLIC)**, **Graph-Based Q-Shift** on KNN graphs, bidirectional scanning, gated fusion, and multi-scale feature output. The architecture supports interpolatable position embeddings, CLS token variants, and stochastic depth, with native support for the **OkLAB** perceptual color space.
 
 This repository contains the inference codebase: model definitions, a demo script, and a test suite. Training pipelines and pretrained weights are maintained separately.
 
@@ -61,45 +61,58 @@ outs = model(x)  # tuple of feature maps per out_indices
 
 ## Architecture Overview
 
-Vision-RWKV-7 spine (`Vision_RWKV7_Block`) processes an image through 11 design features:
+Vision-RWKV-7 spine (`Vision_RWKV7_Block`) processes an image through 12 design features:
 
 | # | Feature | Description |
 |---|---------|-------------|
-| 1 | Q-Shift | 4-directional 2D token shift along channel groups (spatial residual) |
-| 2 | Bidirectional Scan | Forward + backward RWKV-7 delta-rule recurrence over the flattened sequence |
-| 3 | Gated Fusion | Learned per-token gate blending forward and backward scan outputs |
-| 4 | Interpolatable PosEmbed | Position embedding resized via bicubic interpolation for variable-resolution inputs |
-| 5 | Flexible Decay | Input-dependent decay `w = exp(-0.606531 * sigmoid(w_raw))` bounded in (0.545, 1) |
-| 6 | Bounded Exponentials | All exponentiated values remain within stable numeric ranges |
-| 7 | Extra LayerNorm | Post-attention `att_ln` and post-FFN `ffn_ln` for training stability |
-| 8 | Layer Scale | Learnable `gamma1`/`gamma2` per-block scaling (init 1e-5) |
-| 9 | Value Residual | `v = v_0 + (v - v_0) * sigmoid(nu)` — lerp between layer-0 values and current |
-| 10 | Input-Dependent Mixing | Dynamic Q-Shift offsets via low-rank MLP (`time_maa_w1`/`w2`) |
-| 11 | Multi-Scale Output | Features extracted at configurable block indices, reshaped to `(B, C, H, W)` |
+| 1 | Superpixel Tokenization | Differentiable SLIC (`diffSLIC`) generates irregular tokens adapted to image content |
+| 2 | Graph-Based Q-Shift | Multi-head token shift along KNN graph edges (spatial residual) |
+| 3 | Bidirectional Scan | Forward + backward RWKV-7 delta-rule recurrence over the superpixel sequence |
+| 4 | Gated Fusion | Learned per-token gate blending forward and backward scan outputs |
+| 5 | OkLAB Support | Native differentiable OkLAB color space conversion and gamut clipping |
+| 6 | Interpolatable PosEmbed | 1D Position embedding resized for variable superpixel counts |
+| 7 | Flexible Decay | Input-dependent decay `w = exp(-0.606531 * sigmoid(w_raw))` bounded in (0.545, 1) |
+| 8 | Bounded Exponentials | All exponentiated values remain within stable numeric ranges |
+| 9 | Extra LayerNorm | Post-attention `att_ln` and post-FFN `ffn_ln` for training stability |
+| 10 | Layer Scale | Learnable `gamma1`/`gamma2` per-block scaling (init 1e-5) |
+| 11 | Value Residual | `v = v_0 + (v - v_0) * sigmoid(nu)` — lerp between layer-0 values and current |
+| 12 | Multi-Scale Output | Features scattered back to grid at configurable block indices, reshaped to `(B, C, H, W)` |
 
-The backbone (`Vision_RWKV7`) wraps patch embedding, position embedding, a stack of `Vision_RWKV7_Block`, optional CLS token, and final norm. The recurrence uses a generalized delta rule with decoupled removal/replacement keys and a per-head bonus term.
+The backbone (`Vision_RWKV7`) wraps `diffSLIC`, superpixel embedding, KNN graph construction, a stack of `Vision_RWKV7_Block`, optional CLS token, and final norm. The recurrence uses a generalized delta rule with decoupled removal/replacement keys and a per-head bonus term.
 
 ## Code Structure
 
 ```
 Visual_RWKV7_Pytorch/
-  model.py         -- All model code: Vision_RWKV7, Vision_RWKV7_Block,
-                     q_shift_multihead, resize_pos_embed, utility classes
-  main.py          -- Demo / verification script
-  test_model.py    -- pytest test suite
-  pyproject.toml   -- Project metadata and dependencies
-  README.md        -- Quick-start instructions
-  CONTRIBUTING.md  -- This file
+  VisualRWKV7/      -- Core package
+    model.py        -- Vision_RWKV7 and Vision_RWKV7_Block definitions
+    diffSLIC.py     -- Differentiable SLIC implementation
+    utils/
+      colors.py     -- OkLAB/sRGB conversion utilities
+      gamut.py      -- OkLAB gamut clipping methods
+      data.py       -- Image loading and dataset statistics
+      graph.py      -- KNN graph construction and Graph Q-Shift
+      drop.py       -- Stochastic depth (DropPath)
+      diffSLIC_funcs.py -- diffSLIC helper kernels
+  tests/            -- Comprehensive test suite
+    test_model.py   -- Backbone and block invariants
+    test_diffSlic.py -- diffSLIC correctness and stability
+    test_colors.py  -- Color space conversion and gamut clipping
+    test_dataload.py -- Data loading and statistics
+    test_regression.py -- Numerical stability and regression checks
+  main.py           -- Demo / verification script
+  pyproject.toml    -- Project metadata and dependencies
+  README.md         -- Quick-start instructions
+  CONTRIBUTING.md   -- This file
   .agents/
-    AGENTS.md      -- AI-specific contribution instructions
+    AGENTS.md       -- AI-specific contribution instructions
 ```
 
-- **`model.py`** is the single source of truth for the architecture. It contains:
-  - Utility modules: `Permute`, `DropPath`, `q_shift_multihead()`, `resize_pos_embed()`, `drop_path()`
-  - `Vision_RWKV7_Block` (nn.Module) — one transformer-style block with time-mix (bidirectional RWKV-7 recurrence + gated fusion) and channel-mix (ReLU^2 MLP)
-  - `Vision_RWKV7` (nn.Module) — the full backbone: patch embed, pos embed, block stack, final norm, multi-scale feature extraction
+- **`VisualRWKV7/model.py`** is the primary architecture file.
+- **`VisualRWKV7/diffSLIC.py`** handles the irregular tokenization logic.
+- **`VisualRWKV7/utils/`** contains modularized mathematical and data utilities.
+- **`tests/`** contains granular tests for each subsystem.
 - **`main.py`** is a standalone demo showing model instantiation, forward pass, parameter count, and determinism verification.
-- **`test_model.py`** contains all tests (see [Testing](#testing--qa)).
 
 ## Opening Issues
 
@@ -129,29 +142,29 @@ Visual_RWKV7_Pytorch/
 
 ## Testing & QA
 
-Tests are in `test_model.py` and use `pytest`.
+Tests are located in the `tests/` directory and use `pytest`.
 
 ```bash
 # Run the full test suite
-uv run pytest test_model.py -v
+uv run pytest
 
-# Run a specific test
-uv run pytest test_model.py::test_q_shift_logic -v
+# Run a specific test file
+uv run pytest tests/test_colors.py -v
 
 # Run with warnings (useful for catching device/dtype issues)
-uv run pytest test_model.py -v -W all
+uv run pytest -v -W all
 ```
 
 The test suite covers:
 
-- **Q-Shift correctness** — verifies that 4-directional spatial shifting produces correct pixel movement and zero-padding at boundaries.
-- **Multi-scale indices** — checks that `out_indices` selects the expected block outputs with correct feature map shapes.
-- **Resolution interpolation** — verifies the model handles input resolutions different from `img_size` (pos-embed interpolation).
-- **CLS token behavior** — verifies CLS token inclusion and separate output.
-- **v_first propagation** — confirms that Value Residual (`v_first`) changes the block output.
+- **Color Space Correctness** — verifies OkLAB/sRGB conversions and gamut clipping stability.
+- **diffSLIC Stability** — ensures no NaNs on black/uniform images and verifies gradient flow.
+- **Graph Q-Shift logic** — verifies token movement along KNN graph edges.
+- **Multi-scale indices** — checks that `out_indices` selects the expected block outputs.
+- **Dataset Statistics** — verifies mean/std calculation accuracy across batch sizes.
 - **Numerical stability** — checks large-resolution inputs produce finite outputs.
-- **RWKV-7-specific features** — decay bounds, input-dependent mixing, decoupled keys, bonus term, state update formula.
-- **Determinism** — verifies identical input produces identical output (no random state leakage).
+- **RWKV-7-specific features** — decay bounds, input-dependent mixing, decoupled keys, bonus term.
+- **Determinism** — verifies identical input produces identical output.
 
 When adding tests:
 - Each test should verify exactly one behavior or invariant.
