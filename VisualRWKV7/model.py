@@ -4,132 +4,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 
 # Import diffSLIC components from the same directory
 from .diffSLIC import DiffSLIC, spixel_upsampling
+from .graph import build_knn_graph, q_shift_graph_multihead, HEAD_SIZE
+from .drop import DropPath
 
-HEAD_SIZE = 64
 TIME_MIX_EXTRA_DIM = 32
-
-# =====================================================================
-# Graph-Based Helpers (UPDATED FOR BATCHED GRAPHS)
-# =====================================================================
-
-
-def build_knn_graph(centroids: torch.Tensor, k: int = 4) -> torch.Tensor:
-    """Builds a K-Nearest Neighbors graph from superpixel centroids.
-    Supports both single [N, 2] and batched [B, N, 2] centroids.
-    """
-    squeeze = False
-    if centroids.dim() == 2:
-        centroids = centroids.unsqueeze(0)
-        squeeze = True
-
-    B, N, _ = centroids.shape
-    centroids = centroids.float()
-    dists = torch.cdist(centroids, centroids)  # [B, N, N]
-
-    # Fill diagonal with inf for each batch independently
-    mask = (
-        torch.eye(N, dtype=torch.bool, device=centroids.device)
-        .unsqueeze(0)
-        .expand(B, -1, -1)
-    )
-    dists = dists.masked_fill(mask, float("inf"))
-
-    _, neighbors = torch.topk(dists, k, dim=2, largest=False)  # [B, N, k]
-
-    if squeeze:
-        neighbors = neighbors.squeeze(0)
-    return neighbors
-
-
-def q_shift_graph_multihead(
-    input: torch.Tensor,
-    neighbors: torch.Tensor,  # [N, K] or [B, N, K]
-    head_dim: int = HEAD_SIZE,
-    with_cls_token: bool = False,
-) -> torch.Tensor:
-    """Graph-based Q-Shift for superpixel or irregular grids.
-    Now fully supports batched graphs [B, N, K] for data-dependent topologies.
-    """
-    B, N_total, C = input.shape
-    assert C % head_dim == 0, f"C={C} not divisible by head_dim={head_dim}"
-    n_head = C // head_dim
-
-    # Handle unbatched neighbors by expanding to batch size
-    if neighbors.dim() == 2:
-        neighbors = neighbors.unsqueeze(0).expand(B, -1, -1)
-
-    K = neighbors.shape[2]
-    assert head_dim % K == 0, f"head_dim={head_dim} must be divisible by K={K}"
-    group_size = head_dim // K
-
-    cls_tokens = None
-    if with_cls_token:
-        cls_tokens = input[:, [-1], :]
-        input = input[:, :-1, :]
-        N = N_total - 1
-    else:
-        N = N_total
-
-    assert neighbors.shape[1] == N, (
-        f"neighbors length {neighbors.shape[1]} must match N={N}"
-    )
-
-    x = input.view(B, N, n_head, head_dim)
-    output = torch.zeros_like(x)
-    clamped_neighbors = neighbors.clamp(min=0)
-
-    for k in range(K):
-        neighbor_idx = clamped_neighbors[:, :, k]  # [B, N]
-
-        # Extract the k-th group from x: [B, N, n_head, group_size]
-        x_group = x[:, :, :, k * group_size : (k + 1) * group_size]
-
-        # Expand neighbor_idx for gathering: [B, N, n_head, group_size]
-        idx = (
-            neighbor_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, n_head, group_size)
-        )
-
-        # Gather features from the neighbors along the sequence dimension (dim=1)
-        gathered_group = torch.gather(x_group, 1, idx)
-
-        # Zero out features from invalid (-1) neighbors
-        valid_k = (neighbors[:, :, k] != -1).view(B, N, 1, 1)
-        gathered_group = gathered_group * valid_k
-
-        # Assign to the k-th group of the output
-        output[:, :, :, k * group_size : (k + 1) * group_size] = gathered_group
-
-    output = output.view(B, N, C)
-    if with_cls_token:
-        assert cls_tokens is not None
-        output = torch.cat((output, cls_tokens), dim=1)
-    return output
-
-
-def drop_path(x, drop_prob=0.0, training=False):
-    if drop_prob == 0.0 or not training:
-        return x
-    keep_prob = 1 - drop_prob
-    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-    random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
-    random_tensor.floor_()
-    return x.div(keep_prob) * random_tensor
-
-
-class DropPath(nn.Module):
-    __slots__ = ("drop_prob",)
-
-    def __init__(self, drop_prob=0.0):
-        super().__init__()
-        self.drop_prob = drop_prob
-
-    def forward(self, x):
-        return drop_path(x, self.drop_prob, self.training)
-
 
 # =====================================================================
 # Vision_RWKV7_Block
@@ -145,7 +27,7 @@ class Vision_RWKV7_Block(nn.Module):
         n_head: int,
         n_layer: int,
         layer_id: int,
-        drop_path: float = 0.0,
+        drop_prob: float = 0.0,
         init_values: Optional[float] = None,
         with_cls_token: bool = False,
     ):
@@ -160,7 +42,7 @@ class Vision_RWKV7_Block(nn.Module):
 
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
-        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
+        self.drop_path = DropPath(drop_prob) if drop_prob > 0.0 else nn.Identity()
         if layer_id == 0:
             self.ln0 = nn.LayerNorm(n_embd)
 
@@ -287,7 +169,13 @@ class Vision_RWKV7_Block(nn.Module):
         dm = x_dyn.view(6, B, N, D)
         return {"xx": xx, "dm": dm}
 
-    def _scan(self, xn, sp, direction, v_first_seq):
+    def _scan(
+        self,
+        xn: torch.Tensor,
+        sp: dict,
+        direction: str,
+        v_first_seq: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         B, N, D = xn.shape
         Hd, S, dev = self.n_head, self.head_size, xn.device
         rev = direction == "backward"
@@ -374,7 +262,13 @@ class Vision_RWKV7_Block(nn.Module):
                 v_first_out = torch.flip(v_first_out, dims=[1])
         return out, v_first_out
 
-    def forward(self, x, neighbors, v_first_fwd=None, v_first_bwd=None):
+    def forward(
+        self,
+        x: torch.Tensor,
+        neighbors: torch.Tensor,
+        v_first_fwd: Optional[torch.Tensor] = None,
+        v_first_bwd: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         if self.layer_id == 0:
             x = self.ln0(x)
         xn = self.ln1(x)
@@ -409,7 +303,7 @@ class Vision_RWKV7_Block(nn.Module):
 
 
 # =====================================================================
-# Tokenization + Embedding (UPDATED FOR DYNAMIC K)
+# Tokenization + Embedding
 # =====================================================================
 
 
@@ -495,7 +389,7 @@ class Vision_RWKV7(nn.Module):
         self.blocks = nn.ModuleList(
             [
                 Vision_RWKV7_Block(
-                    embed_dims, num_heads, depth, i, dpr[i], init_values, with_cls_token
+                    embed_dims, num_heads, depth, i, drop_prob=dpr[i], init_values=init_values, with_cls_token=with_cls_token
                 )
                 for i in range(depth)
             ]

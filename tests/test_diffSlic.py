@@ -1,6 +1,7 @@
 """Complete test and debug of diffSLIC to ensure it works on any image."""
 
 import torch
+import pytest
 import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
@@ -234,41 +235,26 @@ def test_diffslic_nan_safety_with_black_pixels():
     assert torch.isfinite(clst_feats).all(), "clst_feats has non-finite values"
 
 
-def test_with_different_configs():
-    """Tests different hyperparameter configurations."""
-    print("\n" + "=" * 80)
-    print("TESTING DIFFERENT CONFIGURATIONS")
-    print("=" * 80)
-
-    # Default test image
+@pytest.mark.parametrize("n_spixels,n_iter,tau", [
+    (49, 5, 0.01),
+    (196, 10, 0.01),
+    (400, 15, 0.005),
+    (196, 20, 0.001),
+])
+def test_with_different_configs(n_spixels, n_iter, tau):
+    """Run diffSLIC with different hyperparameter configurations."""
     test_img = torch.randn(1, 3, 224, 224) * 0.5
-
-    configs = [
-        {"n_spixels": 49, "n_iter": 5, "tau": 0.01},  # Few superpixels
-        {"n_spixels": 196, "n_iter": 10, "tau": 0.01},  # Default config
-        {"n_spixels": 400, "n_iter": 15, "tau": 0.005},  # Many superpixels
-        {"n_spixels": 196, "n_iter": 20, "tau": 0.001},  # Many iterations
-    ]
-
-    for i, config in enumerate(configs):
-        print(f"\nConfig {i + 1}: {config}")
-
-        diff_slic = DiffSLIC(
-            n_spixels=config["n_spixels"],
-            n_iter=config["n_iter"],
-            tau=config["tau"],
-            candidate_radius=1,
-            normalize=True,
-        )
-
-        try:
-            with torch.no_grad():
-                clst_feats, p2s_assign, _ = diff_slic(test_img)
-                h_s, w_s = clst_feats.shape[-2:]
-                K_actual = h_s * w_s
-                print(f"  [OK] Success: {K_actual} superpixels generated")
-        except Exception as e:
-            print(f"  [FAIL] Failure: {str(e)}")
+    diff_slic = DiffSLIC(
+        n_spixels=n_spixels,
+        n_iter=n_iter,
+        tau=tau,
+        candidate_radius=1,
+        normalize=True,
+    )
+    with torch.no_grad():
+        clst_feats, p2s_assign, _ = diff_slic(test_img)
+    assert torch.isfinite(clst_feats).all()
+    assert torch.isfinite(p2s_assign).all()
 
 
 def test_diffslic_soft_assignment_probability():

@@ -16,11 +16,14 @@ from VisualRWKV7.model import (
 
 def get_dummy_neighbors(B, N, K=4):
     """Helper to create dummy valid neighbors for testing blocks."""
-    neighbors = torch.zeros(B, N, K, dtype=torch.long)
-    for i in range(N):
-        for k in range(K):
-            neighbors[:, i, k] = (i + k + 1) % N
-    return neighbors
+    offsets = torch.arange(1, K + 1).unsqueeze(0)  # [1, K]
+    neighbors = (torch.arange(N).unsqueeze(1) + offsets) % N  # [N, K]
+    return neighbors.unsqueeze(0).expand(B, -1, -1)  # [B, N, K]
+
+
+# Common small model configs to reduce duplication across tests
+_TINY_CONFIG = dict(img_size=32, embed_dims=64, num_heads=1, depth=1, num_superpixels=9, diff_slic_iters=2)
+_SMALL_CONFIG = dict(img_size=64, embed_dims=64, num_heads=1, depth=2, num_superpixels=16, diff_slic_iters=2)
 
 
 # =====================================================================
@@ -131,7 +134,7 @@ def test_superpixel_embedding_soft():
 
 
 # =====================================================================
-# Vision_RWKV7_Block Tests (Updated for Graph Neighbors)
+# Vision_RWKV7_Block Tests
 # =====================================================================
 
 
@@ -223,14 +226,7 @@ def test_rwkv7_bonus_term():
 
 def test_vision_rwkv7_forward_hard():
     """Test full backbone forward pass with hard superpixel mode."""
-    model = Vision_RWKV7(
-        img_size=64,
-        embed_dims=64,
-        num_heads=1,
-        depth=2,
-        num_superpixels=16,  # 4x4 grid
-        diff_slic_iters=2,
-    )
+    model = Vision_RWKV7(**_SMALL_CONFIG)
     x = torch.randn(1, 3, 64, 64)
     outs = model(x)
 
@@ -242,14 +238,7 @@ def test_vision_rwkv7_forward_hard():
 
 def test_vision_rwkv7_forward_soft():
     """Test full backbone forward pass if we manually change mode to soft."""
-    model = Vision_RWKV7(
-        img_size=64,
-        embed_dims=64,
-        num_heads=1,
-        depth=2,
-        num_superpixels=16,
-        diff_slic_iters=2,
-    )
+    model = Vision_RWKV7(**_SMALL_CONFIG)
     # Manually switch to soft mode to test that branch
     model.patch_embed.mode = "soft"
 
@@ -263,9 +252,7 @@ def test_vision_rwkv7_forward_soft():
 
 def test_output_matches_input_resolution():
     """Verify that the scattered output matches the original input resolution."""
-    model = Vision_RWKV7(
-        img_size=64, embed_dims=64, num_heads=1, depth=2, num_superpixels=16
-    )
+    model = Vision_RWKV7(**_TINY_CONFIG)
     # Test with a different resolution than img_size
     x = torch.randn(1, 3, 128, 128)
     outs = model(x)
@@ -278,11 +265,12 @@ def test_multi_scale_indices():
     """Verify that out_indices correctly returns features from multiple layers."""
     depth = 4
     model = Vision_RWKV7(
-        img_size=64,
+        img_size=32,
         embed_dims=64,
         num_heads=1,
         depth=depth,
-        num_superpixels=16,
+        num_superpixels=9,
+        diff_slic_iters=2,
         out_indices=[1, 3],
     )
     x = torch.randn(1, 3, 64, 64)
@@ -296,15 +284,7 @@ def test_multi_scale_indices():
 
 def test_cls_token_behavior():
     """Verify CLS token handling and output."""
-    model = Vision_RWKV7(
-        img_size=64,
-        embed_dims=64,
-        num_heads=1,
-        depth=2,
-        num_superpixels=16,
-        with_cls_token=True,
-        output_cls_token=True,
-    )
+    model = Vision_RWKV7(**_TINY_CONFIG, with_cls_token=True, output_cls_token=True)
     x = torch.randn(1, 3, 64, 64)
     outs = model(x)
 
@@ -317,14 +297,7 @@ def test_cls_token_behavior():
 
 def test_numerical_stability_long_seq():
     """Check for stability with larger grids (longer sequences)."""
-    model = Vision_RWKV7(
-        img_size=128,
-        embed_dims=64,
-        num_heads=1,
-        depth=2,
-        num_superpixels=64,  # 8x8 grid -> 64 tokens
-        diff_slic_iters=2,
-    )
+    model = Vision_RWKV7(**_TINY_CONFIG)
     x = torch.randn(1, 3, 128, 128)
     outs = model(x)
     assert torch.isfinite(outs[0]).all()
@@ -376,14 +349,7 @@ def test_rwkv7_state_update_logic():
 
 def test_deterministic_behavior():
     """Verify that same input produces same output."""
-    model = Vision_RWKV7(
-        img_size=64,
-        embed_dims=64,
-        num_heads=1,
-        depth=2,
-        num_superpixels=16,
-        diff_slic_iters=2,
-    )
+    model = Vision_RWKV7(**_SMALL_CONFIG)
     x = torch.randn(1, 3, 64, 64)
 
     out1 = model(x)
@@ -398,20 +364,13 @@ def test_deterministic_behavior():
 
 
 # =====================================================================
-# Behavioral Tests (Coverage Expansion)
+# Behavioral Tests
 # =====================================================================
 
 
 def test_forward_finite_random_input():
     """Forward pass with random input produces all-finite outputs."""
-    model = Vision_RWKV7(
-        img_size=64,
-        embed_dims=64,
-        num_heads=1,
-        depth=2,
-        num_superpixels=16,
-        diff_slic_iters=2,
-    )
+    model = Vision_RWKV7(**_SMALL_CONFIG)
     x = torch.randn(2, 3, 64, 64)  # batch=2
     outs = model(x)
     assert all(torch.isfinite(o).all() for o in outs)
@@ -489,14 +448,7 @@ def test_non_square_input():
 def test_minimal_depth():
     """Model with depth=1 and small config produces finite output."""
     # HEAD_SIZE=64, so embed_dims must be >= HEAD_SIZE * n_head = 64
-    model = Vision_RWKV7(
-        img_size=32,
-        embed_dims=64,
-        num_heads=1,
-        depth=1,
-        num_superpixels=4,
-        diff_slic_iters=1,
-    )
+    model = Vision_RWKV7(**_TINY_CONFIG)
     x = torch.randn(1, 3, 32, 32)
     outs = model(x)
     assert len(outs) == 1

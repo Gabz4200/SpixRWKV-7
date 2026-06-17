@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from skimage import data, segmentation
 
-# Ensure these match your project structure
 from VisualRWKV7.diffSLIC import DiffSLIC, spixel_upsampling
 from VisualRWKV7.model import (
     build_knn_graph,
