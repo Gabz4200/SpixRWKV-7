@@ -6,7 +6,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 from VisualRWKV7.diffSLIC import DiffSLIC, spixel_upsampling, spixel_downsampling
-import os
 
 
 def _run_diffslic_on_multiple_images():
@@ -66,7 +65,7 @@ def _run_diffslic_on_multiple_images():
         )
         real_img = F.interpolate(real_img, size=(224, 224), mode="bilinear")
         test_images.append(("Real Image", real_img))
-    except:
+    except Exception:
         print("No real image found, skipping...")
 
     print(f"Testing diffSLIC with {n_spixels} superpixels, {n_iter} iterations\n")
@@ -127,7 +126,7 @@ def _run_diffslic_on_multiple_images():
                 if len(missing_labels) > 0:
                     print(f"  WARNING: {len(missing_labels)} empty superpixels!")
                 else:
-                    print(f"  [OK] All superpixels are present")
+                    print("  [OK] All superpixels are present")
 
                 results.append(
                     {
@@ -200,34 +199,21 @@ def _run_diffslic_on_multiple_images():
 
 
 def label_to_rgb(labels):
-    """Converts integer labels to colored RGB."""
+    """Converts integer labels to colored RGB via vectorized array indexing."""
     from matplotlib.colors import hsv_to_rgb
 
-    h, w = labels.shape
-    rgb = np.zeros((h, w, 3), dtype=np.float32)
-
-    # Unique colors for each label
     unique_labels = np.unique(labels)
     n_colors = len(unique_labels)
 
-    # Generate evenly spaced HSV colors
     hues = np.linspace(0, 1, n_colors, endpoint=False)
-    saturation = np.ones(n_colors) * 0.8
-    value = np.ones(n_colors) * 0.9
-
-    hsv_colors = np.stack([hues, saturation, value], axis=1)
+    hsv_colors = np.stack([
+        hues, np.full(n_colors, 0.8), np.full(n_colors, 0.9)
+    ], axis=1)
     rgb_colors = hsv_to_rgb(hsv_colors)
 
-    # Map labels to colors
-    label_to_idx = {label: idx for idx, label in enumerate(unique_labels)}
-
-    for i in range(h):
-        for j in range(w):
-            label = labels[i, j]
-            idx = label_to_idx[label]
-            rgb[i, j] = rgb_colors[idx]
-
-    return rgb
+    idx_map = np.zeros(labels.max() + 1, dtype=int)
+    idx_map[unique_labels] = np.arange(n_colors)
+    return rgb_colors[idx_map[labels]]
 
 
 def test_diffslic_nan_safety_with_black_pixels():

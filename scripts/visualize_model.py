@@ -10,7 +10,6 @@ from VisualRWKV7.model import (
     build_knn_graph,
     Vision_RWKV7,
     q_shift_graph_multihead,
-    HEAD_SIZE,
 )
 
 
@@ -20,7 +19,7 @@ def visualize_superpixels_and_graph(img_np, img_tensor, ax):
     diff_slic = DiffSLIC(n_spixels=n_spixels, n_iter=10, tau=0.01, candidate_radius=1)
 
     with torch.no_grad():
-        B, C, H, W = img_tensor.shape
+        B, _, H, W = img_tensor.shape
         grid_y, grid_x = torch.meshgrid(
             torch.linspace(-1, 1, H, device=img_tensor.device),
             torch.linspace(-1, 1, W, device=img_tensor.device),

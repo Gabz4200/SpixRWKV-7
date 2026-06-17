@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pytest
 from VisualRWKV7.model import (
     build_knn_graph,
     q_shift_graph_multihead,
@@ -52,7 +51,6 @@ def test_q_shift_graph_multihead_logic():
     """Verify that Graph Q-Shift correctly shifts tokens along graph edges."""
     B, N, C = 1, 4, 16
     head_dim = 16
-    K = 2  # 2 neighbors per node
 
     # Graph: Node 0 connects to 1, 2. Node 1 connects to 0, 3, etc.
     neighbors = torch.tensor([[[1, 2], [0, 3], [0, 3], [1, 2]]])  # [B, N, K]
@@ -356,7 +354,7 @@ def test_rwkv7_state_update_logic():
     n_head = 1
     head_size = 64
 
-    B, N, D = 1, 1, n_embd
+    B, D = 1, n_embd
     Hd, S = n_head, head_size
 
     w = torch.rand(B, D)
@@ -365,8 +363,6 @@ def test_rwkv7_state_update_logic():
     kk = F.normalize(kk.view(B, Hd, S), dim=-1).view(B, D)
     kt = torch.rand(B, D)
     v = torch.rand(B, D)
-
-    state = torch.zeros(B, Hd, S, S)
 
     vk = v.view(B, Hd, S, 1) @ kt.view(B, Hd, 1, S)
     ab = (-kk).view(B, Hd, S, 1) @ (kk * a).view(B, Hd, 1, S)

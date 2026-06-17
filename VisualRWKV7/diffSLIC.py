@@ -7,6 +7,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Filler value for masked positions in softmax (finite to avoid NaN when all positions are masked)
+FILLER = -1e9
+
+
+def _masked_softmax(similarities, tau=0.01, dim=1, stable=False):
+    """Apply softmax with temperature, masking zero-similarity positions.
+
+    Uses FILLER (finite) instead of -inf to avoid NaN when ALL positions are masked.
+    """
+    similarities = torch.where(similarities == 0, FILLER, similarities)
+    if stable:
+        similarities = similarities - similarities.max(dim, keepdim=True).values.detach()
+    return (similarities / tau).softmax(dim)
+
 
 def compute_stride_and_padding(img_shape, spixel_shape):
     """
@@ -100,7 +114,7 @@ def spixel_upsampling(
 def spixel_downsampling(
     x: torch.Tensor,
     assignments: torch.Tensor,
-    stride: Tuple[int, int] = None,
+    stride: Optional[Tuple[int, int]] = None,
     candidate_radius: int = 1,
 ) -> torch.Tensor:
     r"""downsampling a feature map based on superpixels
@@ -195,13 +209,7 @@ def compute_elem_to_center_assignment(
         similarities, (height, width), kernel_size=stride, stride=stride
     )
     similarities = similarities.reshape(batch_size, neighbor_range**2, height, width)
-    # mask zero padding regions with -1e9 (finite to avoid NaN from softmax(all -inf))
-    # by using the fact that the inner product is zero.
-    FILLER = -1e9
-    similarities = torch.where(similarities == 0, FILLER, similarities)
-    if stable:
-        similarities = similarities - similarities.max(1, keepdim=True).values.detach()
-    soft_assignment = (similarities / tau).softmax(1)
+    soft_assignment = _masked_softmax(similarities, tau, dim=1, stable=stable)
     return soft_assignment, similarities
 
 
@@ -242,12 +250,8 @@ def compute_center_to_elem_assignment(
     )
     unfold_elem_feats = unfold_elem_feats.reshape(b, c, n_candidate_pixels, h, w)
     similarities = torch.einsum("bcphw,bchw->bphw", (unfold_elem_feats, clst_feats))
-    FILLER = -1e9
-    similarities = torch.where(similarities == 0, FILLER, similarities)
-    if stable:
-        similarities = similarities - similarities.max(1, keepdim=True).values.detach()
-    soft_assignemnt = torch.softmax(similarities / tau, dim=1)
-    return soft_assignemnt, similarities
+    soft_assignment = _masked_softmax(similarities, tau, dim=1, stable=stable)
+    return soft_assignment, similarities
 
 
 def update_clst_feats(
@@ -289,15 +293,11 @@ def update_clst_feats(
     )
     unfold_elem_feats = unfold_elem_feats.reshape(b, c, n_candidate_pixels, h, w)
     similarities = torch.einsum("bcphw,bchw->bphw", (unfold_elem_feats, clst_feats))
-    FILLER = -1e9
-    similarities = torch.where(similarities == 0, FILLER, similarities)
-    if stable:
-        similarities = similarities - similarities.max(1, keepdim=True).values.detach()
-    soft_assignemnt = torch.softmax(similarities / tau, dim=1)
+    soft_assignment = _masked_softmax(similarities, tau, dim=1, stable=stable)
     new_clst_feats = torch.einsum(
-        "bphw,bcphw->bchw", (soft_assignemnt, unfold_elem_feats)
+        "bphw,bcphw->bchw", (soft_assignment, unfold_elem_feats)
     )
-    return new_clst_feats, soft_assignemnt, similarities
+    return new_clst_feats, soft_assignment, similarities
 
 
 class DiffSLIC(nn.Module):
@@ -332,7 +332,7 @@ class DiffSLIC(nn.Module):
 
     def forward(
         self, x: torch.Tensor, clst_feats: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         r"""
         Args:
             x (torch.Tensor): a tensor of shape (batch, channels, height, width)
@@ -426,7 +426,7 @@ def lbl_to_rgb(
 if __name__ == "__main__":
     import argparse
     import matplotlib.pyplot as plt
-    from scipy.misc import face
+    from skimage.data import face  # type: ignore[attr-defined]
     from skimage.segmentation import mark_boundaries
     from skimage.segmentation.slic_superpixels import _enforce_label_connectivity_cython
 
@@ -514,7 +514,7 @@ if __name__ == "__main__":
     print(f"#Superpixels {valid_n_spixel}")
     ax3 = fig.add_subplot(2, 2, 3)  # bottom left
     # spixels' boundaries after postprocessing
-    ax3.imshow(mark_boundaries(face(), np_lbl))
+    ax3.imshow(mark_boundaries(face(), np_lbl))  # type: ignore[arg-type]
     ax4 = fig.add_subplot(2, 2, 4)  # bottom right
     # spixels with random colos after postprocessing
     ax4.imshow(lbl_to_rgb(np_lbl, color_palette)[0])

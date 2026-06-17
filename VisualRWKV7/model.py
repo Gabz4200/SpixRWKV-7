@@ -4,7 +4,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional, Sequence
+from typing import Optional, Sequence
 
 # Import diffSLIC components from the same directory
 from .diffSLIC import DiffSLIC, spixel_upsampling
@@ -80,10 +80,10 @@ def q_shift_graph_multihead(
 
     x = input.view(B, N, n_head, head_dim)
     output = torch.zeros_like(x)
-    safe_neighbors = neighbors.clamp(min=0)
+    clamped_neighbors = neighbors.clamp(min=0)
 
     for k in range(K):
-        neighbor_idx = safe_neighbors[:, :, k]  # [B, N]
+        neighbor_idx = clamped_neighbors[:, :, k]  # [B, N]
 
         # Extract the k-th group from x: [B, N, n_head, group_size]
         x_group = x[:, :, :, k * group_size : (k + 1) * group_size]
@@ -105,6 +105,7 @@ def q_shift_graph_multihead(
 
     output = output.view(B, N, C)
     if with_cls_token:
+        assert cls_tokens is not None
         output = torch.cat((output, cls_tokens), dim=1)
     return output
 
@@ -427,15 +428,12 @@ class SuperpixelEmbedding(nn.Module):
 
     def forward(self, x: torch.Tensor, sp_map: torch.Tensor) -> torch.Tensor:
         B, C, H, W = x.shape
-        # Dynamically infer K to prevent crashes if diffSLIC alters the grid slightly
-        K = sp_map.max().item() + 1
 
         if self.mode == "hard":
-            K = max(sp_map.max().item() + 1, self.num_superpixels)
+            K = max(int(sp_map.max().item() + 1), self.num_superpixels)
             mask = F.one_hot(sp_map.long(), num_classes=K).permute(0, 3, 1, 2).float()
         else:
             mask = sp_map
-            K = mask.shape[1]
 
         weights = mask / (mask.sum(dim=(2, 3), keepdim=True) + 1e-6)
         sp_features = torch.einsum("bkhw,bchw->bkc", weights, x)
@@ -507,13 +505,13 @@ class Vision_RWKV7(nn.Module):
         if final_norm:
             self.ln1 = nn.LayerNorm(embed_dims)
 
-        out_indices = (
+        indices: list[int] = (
             [out_indices] if isinstance(out_indices, int) else list(out_indices)
         )
-        for i, idx in enumerate(out_indices):
+        for i, idx in enumerate(indices):
             if idx < 0:
-                out_indices[i] = depth + idx
-        self.out_indices = sorted(set(i for i in out_indices if 0 <= i < depth)) or [
+                indices[i] = depth + idx
+        self.out_indices = sorted(set(i for i in indices if 0 <= i < depth)) or [
             depth - 1
         ]
 
@@ -524,6 +522,19 @@ class Vision_RWKV7(nn.Module):
             if self.with_cls_token:
                 self.cls_token.zero_()
             nn.init.trunc_normal_(self.pos_embed, std=0.02)
+
+    @staticmethod
+    def _compute_centroids(mask: torch.Tensor) -> torch.Tensor:
+        """Compute spatial centroids from a superpixel mask [B, K, H, W] -> [B, K, 2] (x, y)."""
+        B, K, H, W = mask.shape
+        grid_y, grid_x = torch.meshgrid(
+            torch.arange(H, device=mask.device),
+            torch.arange(W, device=mask.device),
+            indexing="ij",
+        )
+        coords = torch.stack([grid_x, grid_y], dim=-1).float()
+        counts = mask.sum(dim=(2, 3), keepdim=True).clamp(min=1)
+        return torch.einsum("bkhw,hwc->bkc", mask, coords) / counts.squeeze(-1)
 
     def forward(self, x: torch.Tensor):
         B, C, H, W = x.shape
@@ -554,6 +565,9 @@ class Vision_RWKV7(nn.Module):
         # ---------------------------------------------------------
         # 2. Tokenize & Embed (Mode-dependent logic)
         # ---------------------------------------------------------
+        global_soft_mask: Optional[torch.Tensor] = None
+        global_labels: Optional[torch.Tensor] = None
+
         if self.patch_embed.mode == "hard":
             # HARD MODE: Use argmax to get discrete integer labels [B, H, W]
             neighbor_range = 2 * radius + 1
@@ -598,38 +612,15 @@ class Vision_RWKV7(nn.Module):
         tokens = tokens + self.pos_embed[:, :K, :]
 
         # Compute Centroids to build KNN Graph
-        # Note: For soft mode, we use the soft mask to compute weighted centroids
         if self.patch_embed.mode == "soft":
-            coords = torch.stack(
-                torch.meshgrid(
-                    torch.arange(H, device=x.device),
-                    torch.arange(W, device=x.device),
-                    indexing="ij",
-                ),
-                dim=-1,
-            ).float()
-            # global_soft_mask is [B, K, H, W], coords is [H, W, 2]
-            counts = global_soft_mask.sum(dim=(2, 3), keepdim=True).clamp(min=1e-6)
-            centroids = torch.einsum(
-                "bkhw,hwc->bkc", global_soft_mask, coords
-            ) / counts.squeeze(-1)
+            assert global_soft_mask is not None
+            mask = global_soft_mask
         else:
-            # Hard mode centroid calculation (unchanged)
-            coords = torch.stack(
-                torch.meshgrid(
-                    torch.arange(H, device=x.device),
-                    torch.arange(W, device=x.device),
-                    indexing="ij",
-                ),
-                dim=-1,
-            ).float()
-            one_hot = (
+            assert global_labels is not None
+            mask = (
                 F.one_hot(global_labels, num_classes=K).permute(0, 3, 1, 2).float()
             )
-            counts = one_hot.sum(dim=(2, 3), keepdim=True).clamp(min=1)
-            centroids = torch.einsum("bkhw,hwc->bkc", one_hot, coords) / counts.squeeze(
-                -1
-            )
+        centroids = self._compute_centroids(mask)
 
         # Build Graph
         neighbors = build_knn_graph(centroids.detach(), k=4)
@@ -658,12 +649,14 @@ class Vision_RWKV7(nn.Module):
                 if self.patch_embed.mode == "soft":
                     # For soft mode, we scatter using the soft mask (weighted sum of tokens)
                     # patch_tokens is [B, K, D], global_soft_mask is [B, K, H, W]
+                    assert global_soft_mask is not None
                     feat = torch.einsum(
                         "bkd,bkhw->bhwd", patch_tokens, global_soft_mask
                     )
                     feat = feat.permute(0, 3, 1, 2)  # [B, D, H, W]
                 else:
                     # For hard mode, we gather using the hard labels
+                    assert global_labels is not None
                     feat = patch_tokens.gather(
                         1,
                         global_labels.view(B, H * W, 1).expand(-1, -1, self.embed_dims),
