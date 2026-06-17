@@ -631,9 +631,9 @@ class Vision_RWKV7(nn.Module):
                 F.one_hot(global_labels, num_classes=K).permute(0, 3, 1, 2).float()
             )
             counts = one_hot.sum(dim=(2, 3), keepdim=True).clamp(min=1)
-            centroids = torch.einsum(
-                "bkhw,bhwc->bkc", one_hot, coords
-            ) / counts.squeeze(-1)
+            centroids = torch.einsum("bkhw,hwc->bkc", one_hot, coords) / counts.squeeze(
+                -1
+            )
 
         # Build Graph
         neighbors = build_knn_graph(centroids.detach(), k=4)

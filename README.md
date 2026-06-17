@@ -27,7 +27,7 @@ cd Visual_RWKV7_Pytorch
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Install dependencies using uv (or pip install -r requirements.txt)
+# Install dependencies using uv (or uv sync)
 uv pip install torch torchvision torchaudio
 uv pip install pytest numpy scipy scikit-image matplotlib
 ```
