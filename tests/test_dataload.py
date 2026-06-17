@@ -244,8 +244,8 @@ def test_calculate_dataset_mean_std_batch_consistency(tmp_path):
         str(tmp_path), img_size=32, batch_size=4, color_space="rgb"
     )
 
-    # Results should be nearly identical regardless of batch size
+    # Results should be identical regardless of batch size
     for m1, m4 in zip(mean_b1, mean_b4):
-        assert abs(m1 - m4) < 1e-4
+        assert abs(m1 - m4) < 1e-7
     for s1, s4 in zip(std_b1, std_b4):
-        assert abs(s1 - s4) < 1e-4
+        assert abs(s1 - s4) < 1e-7

@@ -49,6 +49,7 @@ def test_cbrt_correctness_and_gradients():
 
     # Check gradients (standard torch.pow(x, 1/3) yields NaN gradients at x=0)
     y.sum().backward()
+    assert x.grad is not None
     assert torch.isfinite(x.grad).all()
     assert not torch.isnan(x.grad).any()
 
@@ -79,10 +80,12 @@ def test_oklab_linear_roundtrip():
 def test_oklab_gradient_flow_negative():
     """Ensure gradients flow through OkLAB conversions even for negative RGB values."""
     linear = torch.tensor([[-1.0, 0.5, 0.2]], requires_grad=True).reshape(1, 3, 1, 1)
+    linear.retain_grad()
     oklab = from_linear_rgb_to_oklab(linear)
     loss = oklab.sum()
     loss.backward()
 
+    assert linear.grad is not None
     assert torch.isfinite(linear.grad).all()
     assert not torch.isnan(linear.grad).any()
 
@@ -159,7 +162,7 @@ def test_gamut_clip_out_of_gamut_clipped(clip_func):
 
 def test_gamut_clip_gradient_flow():
     """Verify that gradients flow end-to-end through the gamut clipping process."""
-    linear_rgb = torch.randn(1, 3, 16, 16, requires_grad=True) * 2.0
+    linear_rgb = (torch.randn(1, 3, 16, 16) * 2.0).requires_grad_(True)
     clipped = gamut_clip_preserve_chroma(linear_rgb)
     loss = clipped.sum()
     loss.backward()

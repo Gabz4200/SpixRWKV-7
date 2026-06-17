@@ -93,9 +93,9 @@ def _compute_max_saturation(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     m_ = 1.0 + S * k_m
     s_ = 1.0 + S * k_s
 
-    l = l_ * l_ * l_
-    m = m_ * m_ * m_
-    s = s_ * s_ * s_
+    l_lms = l_ * l_ * l_
+    m_lms = m_ * m_ * m_
+    s_lms = s_ * s_ * s_
 
     l_dS = 3.0 * k_l * l_ * l_
     m_dS = 3.0 * k_m * m_ * m_
@@ -105,7 +105,7 @@ def _compute_max_saturation(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     m_dS2 = 6.0 * k_m * k_m * m_
     s_dS2 = 6.0 * k_s * k_s * s_
 
-    f = wl * l + wm * m + ws * s
+    f = wl * l_lms + wm * m_lms + ws * s_lms
     f1 = wl * l_dS + wm * m_dS + ws * s_dS
     f2 = wl * l_dS2 + wm * m_dS2 + ws * s_dS2
 
@@ -195,9 +195,9 @@ def _find_gamut_intersection(
     m_ = L + C * k_m
     s_ = L + C * k_s
 
-    l = l_ * l_ * l_
-    m = m_ * m_ * m_
-    s = s_ * s_ * s_
+    l_lms = l_ * l_ * l_
+    m_lms = m_ * m_ * m_
+    s_lms = s_ * s_ * s_
 
     ldt = 3.0 * l_dt * l_ * l_
     mdt = 3.0 * m_dt * m_ * m_
@@ -207,19 +207,19 @@ def _find_gamut_intersection(
     mdt2 = 6.0 * m_dt * m_dt * m_
     sdt2 = 6.0 * s_dt * s_dt * s_
 
-    r_f = +4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s - 1.0
+    r_f = +4.0767416621 * l_lms - 3.3077115913 * m_lms + 0.2309699292 * s_lms - 1.0
     r_f1 = +4.0767416621 * ldt - 3.3077115913 * mdt + 0.2309699292 * sdt
     r_f2 = +4.0767416621 * ldt2 - 3.3077115913 * mdt2 + 0.2309699292 * sdt2
     u_r = r_f1 / _safe_halley_denom(r_f1 * r_f1 - 0.5 * r_f * r_f2)
     t_r = torch.where(u_r >= 0.0, -r_f * u_r, torch.full_like(u_r, float("inf")))
 
-    g_f = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s - 1.0
+    g_f = -1.2684380046 * l_lms + 2.6097574011 * m_lms - 0.3413193965 * s_lms - 1.0
     g_f1 = -1.2684380046 * ldt + 2.6097574011 * mdt - 0.3413193965 * sdt
     g_f2 = -1.2684380046 * ldt2 + 2.6097574011 * mdt2 - 0.3413193965 * sdt2
     u_g = g_f1 / _safe_halley_denom(g_f1 * g_f1 - 0.5 * g_f * g_f2)
     t_g = torch.where(u_g >= 0.0, -g_f * u_g, torch.full_like(u_g, float("inf")))
 
-    b_f = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s - 1.0
+    b_f = -0.0041960863 * l_lms - 0.7034186147 * m_lms + 1.7076147010 * s_lms - 1.0
     b_f1 = -0.0041960863 * ldt - 0.7034186147 * mdt + 1.7076147010 * sdt
     b_f2 = -0.0041960863 * ldt2 - 0.7034186147 * mdt2 + 1.7076147010 * sdt2
     u_b = b_f1 / _safe_halley_denom(b_f1 * b_f1 - 0.5 * b_f * b_f2)

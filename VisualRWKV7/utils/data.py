@@ -66,9 +66,9 @@ def calculate_dataset_mean_std(
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=2)
 
     # 3. Initialize accumulators for 3 channels
-    mean = torch.zeros(3)
-    sq_mean = torch.zeros(3)
-    num_batches = 0
+    sum_pixels = torch.zeros(3)
+    sum_sq_pixels = torch.zeros(3)
+    total_pixels = 0
 
     print(
         f"Calculating mean and std in {color_space.upper()} space... (This may take a few minutes)"
@@ -85,17 +85,15 @@ def calculate_dataset_mean_std(
         b, c, h, w = images.shape
         pixels = images.permute(0, 2, 3, 1).reshape(-1, c)  # Shape: (B*H*W, C)
 
-        # Accumulate mean and squared mean
-        mean += pixels.mean(dim=0)
-        sq_mean += (pixels**2).mean(dim=0)
-        num_batches += 1
+        # Accumulate sums
+        sum_pixels += pixels.sum(dim=0)
+        sum_sq_pixels += (pixels**2).sum(dim=0)
+        total_pixels += pixels.shape[0]
 
-    # 5. Average over all batches
-    mean /= num_batches
-    sq_mean /= num_batches
-
-    # 6. Calculate final std: sqrt(E[X^2] - (E[X])^2)
-    std = torch.sqrt(sq_mean - mean**2)
+    # 5. Calculate final mean and std
+    mean = sum_pixels / total_pixels
+    var = (sum_sq_pixels / total_pixels) - mean**2
+    std = torch.sqrt(torch.clamp(var, min=0.0))
 
     return mean.tolist(), std.tolist()
 
