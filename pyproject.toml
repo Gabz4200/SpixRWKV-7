@@ -1,7 +1,7 @@
 [project]
-name = "visual-rwkv7-pytorch"
-version = "0.1.0"
-description = "Add your description here"
+name = "spixrwkv7"
+version = "0.2.0"
+description = "SpixRWKV-7: Superpixel Graph RWKV-7 Vision Backbone"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -15,6 +15,8 @@ dependencies = [
     "pillow>=12.2.0",
     "matplotlib>=3.11.0",
     "torchvision>=0.27.0",
+    "hilbertcurve==2.0.5",
+    "datasets>=5.0.0",
 ]
 
 [[tool.uv.index]]
@@ -24,8 +26,18 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch" }
-torchvision = { index = "pytorch" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["spixrwkv7*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

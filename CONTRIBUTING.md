@@ -1,8 +1,8 @@
-# Contributing to Vision-RWKV-7 PyTorch
+# Contributing to SpixRWKV-7
 
-Vision-RWKV-7 is a vision backbone implemented natively in pure PyTorch, designed as a drop-in replacement for ViT. It adapts the RWKV-7 language model recurrence (delta-rule linear attention with input-dependent decay) to 2D image understanding via **Superpixel Tokenization (diffSLIC)**, **Graph-Based Q-Shift** on KNN graphs, bidirectional scanning, gated fusion, and multi-scale feature output. The architecture supports interpolatable position embeddings, CLS token variants, and stochastic depth, with native support for the **OkLAB** perceptual color space.
+SpixRWKV-7 is a recurrent vision backbone implemented in native PyTorch. It adapts the RWKV-7 language model recurrence (delta-rule linear attention with input-dependent decay) to 2D image understanding via **Superpixel Tokenization (diffSLIC)**, **Graph-Based Q-Shift** on KNN graphs, bidirectional scanning, gated fusion, **Hilbert-ordered token sequences**, and multi-scale feature output. The architecture supports interpolatable position embeddings, CLS token variants, and stochastic depth, with native support for the **OkLAB** perceptual color space.
 
-This repository contains the inference codebase: model definitions, a demo script, and a test suite. Training pipelines and pretrained weights are maintained separately.
+This repository contains the inference codebase: model definitions, training convergence tests, a demo script, and a test suite. Training pipelines and pretrained weights are maintained separately.
 
 ## Table of Contents
 
@@ -36,7 +36,7 @@ The `pyproject.toml` pins torch to the CPU-only index by default (`https://downl
 
 ## Usage
 
-The demo script `main.py` instantiates a Vision_RWKV7 backbone (default: tiny, 192-dim, 3 heads, 12 layers, ~20M params) and runs a forward pass with dummy image input.
+The demo script `main.py` instantiates a backbone (default: tiny, 192-dim, 3 heads, 12 layers, ~20M params) and runs a forward pass with dummy image input.
 
 ```bash
 # Run the demo
@@ -46,22 +46,35 @@ uv run python main.py
 To use the model in your own code:
 
 ```python
-from model import Vision_RWKV7
+from VisualRWKV7 import create_vision_rwkv7, ClassificationHead
 
-model = Vision_RWKV7(
-    img_size=224, patch_size=16, in_chans=3,
-    embed_dims=192, num_heads=3, depth=12,
-    init_values=1e-5, final_norm=True,
+backbone = create_vision_rwkv7(
+    img_size=224,
+    embed_dims=192,
+    num_heads=3,
+    depth=12,
     out_indices=[3, 5, 7, 11],
 )
+head = ClassificationHead(embed_dims=192, num_classes=1000)
 
-x = torch.randn(2, 3, 224, 224)
-outs = model(x)  # tuple of feature maps per out_indices
+x = torch.randn(2, 6, 224, 224)  # 6 channels: Lab + alpha + xy
+outs = backbone(x)  # tuple of feature maps per out_indices
+logits = head(outs[-1])
+```
+
+To verify the architecture converges:
+
+```bash
+# Single-batch overfit test (~30s on CPU)
+uv run python scripts/fast_test_training.py
+
+# Full systematic diagnostics
+uv run python scripts/diagnose_training.py --all
 ```
 
 ## Architecture Overview
 
-Vision-RWKV-7 spine (`Vision_RWKV7_Block`) processes an image through 12 design features:
+SpixRWKV-7 spine (`Vision_RWKV7_Block`) processes an image through these design features:
 
 | # | Feature | Description |
 |---|---------|-------------|
@@ -76,55 +89,74 @@ Vision-RWKV-7 spine (`Vision_RWKV7_Block`) processes an image through 12 design 
 | 9 | Extra LayerNorm | Post-attention `att_ln` and post-FFN `ffn_ln` for training stability |
 | 10 | Layer Scale | Learnable `gamma1`/`gamma2` per-block scaling (init 1e-5) |
 | 11 | Value Residual | `v = v_0 + (v - v_0) * sigmoid(nu)` — lerp between layer-0 values and current |
-| 12 | Multi-Scale Output | Features scattered back to grid at configurable block indices, reshaped to `(B, C, H, W)` |
+| 12 | Modular Decomposition | Each major operation is an independent `nn.Module`: `RecurrentScan`, `SpatialMixer`, `ChannelMix`, `SuperpixelTokenizer` — easy to swap, remove, or replace |
 
-The backbone (`Vision_RWKV7`) wraps `diffSLIC`, superpixel embedding, KNN graph construction, a stack of `Vision_RWKV7_Block`, optional CLS token, and final norm. The recurrence uses a generalized delta rule with decoupled removal/replacement keys and a per-head bonus term.
+The backbone (`Vision_RWKV7`) composes `SuperpixelTokenizer` (diffSLIC → embedding → KNN graph → Hilbert reorder), a stack of `Vision_RWKV7_Block`, optional CLS token, and final norm. The recurrence uses a generalized delta rule with decoupled removal/replacement keys and a per-head bonus term.
+
+The `ClassificationHead` is a separate module (GAP → LayerNorm → Linear), keeping the backbone free for dense prediction tasks.
 
 ## Code Structure
 
 ```
 Visual_RWKV7_Pytorch/
-  VisualRWKV7/      -- Core package
-    model.py        -- Vision_RWKV7 and Vision_RWKV7_Block definitions
-    diffSLIC.py     -- Differentiable SLIC implementation
+  VisualRWKV7/           -- Core package (package name: spixrwkv7)
+    __init__.py          -- Public API exports
+    model.py             -- All modules: Vision_RWKV7, Vision_RWKV7_Block,
+                            SuperpixelTokenizer, SuperpixelEmbedding,
+                            SpatialMixer, RecurrentScan, ChannelMix,
+                            ClassificationHead, _DynamicOffset, _TimeMixParams,
+                            create_vision_rwkv7
+    diffSLIC.py          -- Differentiable SLIC implementation
     utils/
-      colors.py     -- OkLAB/sRGB conversion utilities
-      gamut.py      -- OkLAB gamut clipping methods
-      data.py       -- Image loading and dataset statistics
-      graph.py      -- KNN graph construction and Graph Q-Shift
-      drop.py       -- Stochastic depth (DropPath)
-      diffSLIC_funcs.py -- diffSLIC helper kernels
-  tests/            -- Comprehensive test suite
-    test_model.py   -- Backbone and block invariants
-    test_diffSlic.py -- diffSLIC correctness and stability
-    test_colors.py  -- Color space conversion and gamut clipping
-    test_dataload.py -- Data loading and statistics
-    test_regression.py -- Numerical stability and regression checks
-  main.py           -- Demo / verification script
-  pyproject.toml    -- Project metadata and dependencies
-  README.md         -- Quick-start instructions
-  CONTRIBUTING.md   -- This file
+      colors.py          -- OkLAB/sRGB conversion utilities
+      gamut.py           -- OkLAB gamut clipping methods
+      data.py            -- Image loading and dataset statistics
+      graph.py           -- KNN graph construction and Graph Q-Shift
+      drop.py            -- Stochastic depth (DropPath)
+      diffSLIC_funcs.py  -- diffSLIC helper kernels
+  scripts/
+    fast_test_training.py    -- Single-batch overfit convergence test
+    diagnose_training.py     -- Systematic training diagnostics (LR sweep, depth, seeds)
+    visualize_model.py       -- Model feature visualization
+    visualize_superpixels.py -- Superpixel + KNN graph visualization
+    train_humordb.py         -- HumorDB funniness regression (disk caching, full CLI)
+    infer_humordb.py         -- HumorDB checkpoint inference + metrics CSV
+    ade20k_sanity.py         -- ADE20K semantic segmentation (fast CPU overfit test)
+    train_ade20k.py          -- ADE20K semantic segmentation (full training with streaming)
+  tests/                 -- Comprehensive test suite
+    test_model.py        -- Backbone and block invariants (34 tests)
+    test_diffSlic.py     -- diffSLIC correctness and stability
+    test_colors.py       -- Color space conversion and gamut clipping
+    test_dataload.py     -- Data loading and statistics
+    test_regression.py   -- Numerical stability and regression checks
+  main.py                -- Demo / verification script
+  pyproject.toml          -- Project metadata and dependencies
+  README.md              -- Quick-start instructions, training results
+  CONTRIBUTING.md        -- This file
   .agents/
-    AGENTS.md       -- AI-specific contribution instructions
+    AGENTS.md            -- AI-specific contribution instructions
 ```
 
-- **`VisualRWKV7/model.py`** is the primary architecture file.
-- **`VisualRWKV7/diffSLIC.py`** handles the irregular tokenization logic.
-- **`VisualRWKV7/utils/`** contains modularized mathematical and data utilities.
-- **`tests/`** contains granular tests for each subsystem.
-- **`main.py`** is a standalone demo showing model instantiation, forward pass, parameter count, and determinism verification.
+Key files:
+
+- **`VisualRWKV7/model.py`** — The primary architecture file (1017 lines). Contains all core modules organized in a clear reading order: utility classes → `RecurrentScan` → `SpatialMixer` → `ChannelMix` → `Vision_RWKV7_Block` → `SuperpixelEmbedding` → `SuperpixelTokenizer` → `Vision_RWKV7` → `ClassificationHead` → builder.
+- **`VisualRWKV7/diffSLIC.py`** — Handles the irregular tokenization logic.
+- **`VisualRWKV7/utils/`** — Modularized mathematical and data utilities.
+- **`scripts/`** — Training convergence tests, visualization tools, and HumorDB regression experiment. `train_humordb.py`/`infer_humordb.py` demonstrate the full pipeline: HuggingFace dataset loading, disk caching of preprocessed 6-channel tensors, regression head, checkpointing, and metrics. Not part of the core inference package.
+- **`tests/`** — Granular tests for each subsystem (96 tests total).
+- **`main.py`** — Standalone demo showing model instantiation, forward pass, parameter count, and determinism verification.
 
 ## Opening Issues
 
-- **Bug reports**: include the full error trace, Python/PyTorch versions, and a minimal reproduction.
-- **Feature requests**: describe the use case, desired API, and any relevant prior art (VRWKV6, RWKV-7 paper, etc.).
-- **Performance concerns**: include profiling output or benchmark numbers.
+- **Bug reports**: Include the full error trace, Python/PyTorch versions, and a minimal reproduction.
+- **Feature requests**: Describe the use case, desired API, and any relevant prior art (VRWKV6, RWKV-7 paper, etc.).
+- **Performance concerns**: Include profiling output or benchmark numbers.
 
 ## Pull Request Workflow
 
 1. Fork the repository and create a feature branch from `main`.
 2. Make your changes. Keep the scope narrow — a PR should address exactly one concern.
-3. Run the existing test suite (see [Testing](#testing--qa)).
+3. Run the existing test suite (see [Testing & QA](#testing--qa)).
 4. Add tests for new functionality or bug fixes.
 5. Ensure all tests pass before opening the PR.
 6. In the PR description, explain what changed and why. Reference any related issues.
@@ -135,21 +167,22 @@ Visual_RWKV7_Pytorch/
 - **Language**: Python 3.11+. Type hints required for all function signatures (`typing` imports are already present).
 - **Style**: Follow PEP 8. Use descriptive names. Prefer explicit `nn.Parameter` definitions over `nn.Linear` where the linear algebra is non-standard (RWKV-7 has many bespoke parameter groups).
 - **Imports**: Standard library first, then `torch`, then `torch.nn.functional`, then project modules.
-- **Comments**: Document the purpose of each parameter group and the formula it implements (see `_scan` for the delta-rule annotation pattern).
+- **Comments**: Document the purpose of each parameter group and the formula it implements (see `RecurrentScan.forward` for the delta-rule annotation pattern).
 - **Device**: All tensors must be device-agnostic. Never hardcode `cpu()` or `cuda()`.
 - **No global state**: The model should be fully re-entrant. Avoid module-level mutable state.
-- **Backwards compatibility**: Do not rename or remove public class names (`Vision_RWKV7`, `Vision_RWKV7_Block`, `q_shift_multihead`). Add new parameters as optional with sensible defaults.
+- **Backwards compatibility**: Do not rename or remove public class names (`Vision_RWKV7`, `Vision_RWKV7_Block`, `ClassificationHead`, `SuperpixelEmbedding`, `create_vision_rwkv7`, `q_shift_graph_multihead`). Add new parameters as optional with sensible defaults.
+- **Modularity**: Keep components independent — `ClassificationHead` is separate from `Vision_RWKV7`, `RecurrentScan` handles one direction, etc. Do not merge them.
 
 ## Testing & QA
 
 Tests are located in the `tests/` directory and use `pytest`.
 
 ```bash
-# Run the full test suite
+# Run the full test suite (96 tests)
 uv run pytest
 
 # Run a specific test file
-uv run pytest tests/test_colors.py -v
+uv run pytest tests/test_model.py -v
 
 # Run with warnings (useful for catching device/dtype issues)
 uv run pytest -v -W all
@@ -157,19 +190,76 @@ uv run pytest -v -W all
 
 The test suite covers:
 
-- **Color Space Correctness** — verifies OkLAB/sRGB conversions and gamut clipping stability.
-- **diffSLIC Stability** — ensures no NaNs on black/uniform images and verifies gradient flow.
-- **Graph Q-Shift logic** — verifies token movement along KNN graph edges.
-- **Multi-scale indices** — checks that `out_indices` selects the expected block outputs.
-- **Dataset Statistics** — verifies mean/std calculation accuracy across batch sizes.
-- **Numerical stability** — checks large-resolution inputs produce finite outputs.
-- **RWKV-7-specific features** — decay bounds, input-dependent mixing, decoupled keys, bonus term.
-- **Determinism** — verifies identical input produces identical output.
+- **Model Architecture** (test_model.py) — forward pass finiteness, determinism, multi-scale output, CLS token, gradient flow, superpixel embedding modes, graph Q-shift logic, non-square inputs, dynamic resolution via `spixel_size`.
+- **RWKV-7-specific features** — decoupled keys (`.k_k`, `.k_a`), vector-valued decay (`.w0`) and ICLR (`.a0`), bonus term (`.r_k`), state update formula, v_first propagation, input-dependent mixing.
+- **Color Space Correctness** (test_colors.py) — OkLAB/sRGB conversions, gamut clipping stability, finite gradients.
+- **diffSLIC Stability** (test_diffSlic.py) — no NaNs on black/uniform images, gradient flow, soft/hard modes.
+- **Data Loading** (test_dataload.py) — dataset mean/std calculation, batch consistency, OkLAB preprocessing.
+- **Regression** (test_regression.py) — output shape regression, seed determinism, dtype matching.
 
-When adding tests:
+### Training Convergence Tests
+
+Beyond pytest, the `scripts/` directory contains training convergence validation:
+
+```bash
+# Step 1: Single-batch overfit (fast — ~30s on CPU)
+uv run python scripts/fast_test_training.py
+
+# Step 2: Systematic diagnostics
+uv run python scripts/diagnose_training.py --all
+```
+
+These are NOT part of the pytest suite (they require a training setup), but should be run before merging architectural changes to verify the model still converges.
+
+ ### HumorDB Regression Experiment
+ 
+ The `scripts/train_humordb.py` and `scripts/infer_humordb.py` scripts exercise SpixRWKV-7 on a real regression task (HumorDB funniness rating, scale 1–10). They serve as:
+ - A practical validation of the full inference-to-training pipeline
+ - A demonstration of the disk caching pattern for HuggingFace datasets with expensive image preprocessing
+ - A stress test for the architecture on noisy subjective targets
+ 
+ ```bash
+ # Train (20 epochs on CPU, ~2.5h with caching)
+ uv run python scripts/train_humordb.py --epochs 20
+ 
+ # Evaluate best checkpoint
+ uv run python scripts/infer_humordb.py
+ 
+ # Rebuild cache from scratch
+ uv run python scripts/train_humordb.py --rebuild-cache
+ ```
+ 
+ See the [HumorDB Results section in README.md](README.md#humordb-regression-funniness-rating) for findings.
+
+ ### ADE20K Semantic Segmentation Experiment
+
+ The `scripts/ade20k_sanity.py` and `scripts/train_ade20k.py` scripts exercise SpixRWKV-7 on semantic segmentation (ADE20K, 27K+ images, 3K+ object categories). They serve as:
+ - A dense prediction validation using `scatter_output=True` for full-resolution feature maps
+ - A test of the architecture on large-scale segmentation with irregular label space
+ - A demonstration of streaming dataset handling for CPU training
+
+ ```bash
+ # Fast overfit test (128 train / 32 val, ~10 epochs on CPU)
+ uv run python scripts/ade20k_sanity.py --preset tiny --epochs 10
+
+ # Full training with streaming
+ uv run python scripts/train_ade20k.py --preset small --epochs 50
+ ```
+
+ Key findings:
+ - ADE20K uses raw `name_ndx` (80–3116+), not the standard 150-class mapping. Use `discover_ade20k_classes()` to build a compressed label map.
+ - Backbone `scatter_output` features have extreme range `[-1238, 1040]` (tiny config). Add `nn.BatchNorm2d(embed_dims)` before the seg head to normalize.
+ - Streaming DataLoader: use `num_workers=0` or 1 to avoid warnings after `.take()`.
+ - Scale presets: tiny (~1.3M), small (~18M), medium (~57M), 100m (~99.5M).
+
+ See the [ADE20K Results section in README.md](README.md#ade20k-semantic-segmentation) for findings.
+
+ ### When adding tests
+
 - Each test should verify exactly one behavior or invariant.
 - Use small model configurations (`embed_dims=64`, `depth=2`) for fast iteration.
 - Prefer assertions over print-based verification.
+- Access parameters by their logical leaf name via `named_parameters()` (e.g., `next(p for n, p in block.named_parameters() if n.endswith('.k_k'))`) instead of hardcoded module paths — this makes tests resilient to module tree refactoring.
 - For new architectural features, add at least one test that exercises the feature and one that verifies it integrates with the existing forward pass.
 
 ## Agentic / AI Contribution Policy
@@ -188,10 +278,11 @@ Detailed AI-specific rules, prohibited actions, and mandatory checks are in [`.a
 Before closing a PR or marking a change as complete:
 
 - [ ] All modified files are free of debug prints, TODO comments, and commented-out code.
-- [ ] The test suite passes cleanly.
+- [ ] The test suite passes cleanly (96+ tests).
 - [ ] Any new parameters or public APIs are reflected in the relevant docstrings.
 - [ ] No stale branches, merge artifacts, or temporary files remain.
 - [ ] If the change affects inference behavior, update `main.py` or add a new demo path.
+- [ ] If the change touches `VisualRWKV7/`, verify `uv run python scripts/fast_test_training.py` still passes.
 
 ## License
 

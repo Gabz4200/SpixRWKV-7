@@ -1,0 +1,15 @@
+# Tiny model config (~644K params, depth=2, 36 superpixels)
+# Fastest config for debugging and convergence testing
+model:
+  img_size: 64
+  embed_dims: 128
+  num_heads: 2
+  depth: 2
+  drop_path_rate: 0.0
+  init_values: 1.0e-5
+  final_norm: true
+  out_indices: [-1]
+  num_superpixels: 36
+  scatter_output: true
+  diff_slic_iters: 5
+  compactness: 0.5

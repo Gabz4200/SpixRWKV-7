@@ -1,0 +1,16 @@
+class SegHead(nn.Module):
+    """Norm + 1×1 conv segmentation head: (B, D, H, W) → (B, C, H, W)."""
+
+    def __init__(self, embed_dims: int, num_classes: int):
+        super().__init__()
+        self.norm = nn.BatchNorm2d(embed_dims)
+        self.head = nn.Conv2d(embed_dims, num_classes, kernel_size=1, bias=False)
+        self._init_weights()
+
+    def _init_weights(self):
+        nn.init.normal_(self.head.weight, std=0.01)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if isinstance(x, (tuple, list)):
+            x = x[-1]
+        return self.head(self.norm(x))

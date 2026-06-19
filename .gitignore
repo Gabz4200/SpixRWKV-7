@@ -48,6 +48,7 @@ coverage.xml
 
 # Environments
 .env
+.env.*
 .venv
 env/
 venv/
@@ -60,15 +61,35 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
-# IDE
+# IDE / Editor
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
 
+# Checkpoints and training outputs
+checkpoints/
+*.pt
+*.pth
+*.bin
+
 # Custom
 **/reviews
+
+# Babysitter runs
+.a5c/
+
+# Ruff
+.ruff_cache/
+
+# JAX / XLA (ViT-style repos)
+.npz
+
+# Artifacts and outputs
+output.png
+*.log

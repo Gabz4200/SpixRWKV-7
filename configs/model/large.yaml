@@ -1,0 +1,15 @@
+# Large model config (~99.5M params, depth=12, 196 superpixels)
+# Competitive with ViT-L/16
+model:
+  img_size: 224
+  embed_dims: 768
+  num_heads: 12
+  depth: 12
+  drop_path_rate: 0.3
+  init_values: 1.0e-5
+  final_norm: true
+  out_indices: [-1]
+  num_superpixels: 196
+  scatter_output: true
+  diff_slic_iters: 5
+  compactness: 0.5

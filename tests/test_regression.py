@@ -1,7 +1,7 @@
 """Regression tests for numerical stability and edge cases in Vision-RWKV-7."""
 
 import torch
-from VisualRWKV7 import DiffSLIC, Vision_RWKV7
+from spixrwkv7 import DiffSLIC, Vision_RWKV7
 
 
 def test_diffslic_all_black_no_nan():

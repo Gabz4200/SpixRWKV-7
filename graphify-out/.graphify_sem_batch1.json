@@ -1,0 +1,1014 @@
+{
+  "nodes": [
+    {
+      "id": "SpixRWKV-7",
+      "label": "SpixRWKV-7",
+      "type": "architecture",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Vision_RWKV7",
+      "label": "Vision_RWKV7",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Vision_RWKV7_Block",
+      "label": "Vision_RWKV7_Block",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "SuperpixelTokenizer",
+      "label": "SuperpixelTokenizer",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "SuperpixelEmbedding",
+      "label": "SuperpixelEmbedding",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "SpatialMixer",
+      "label": "SpatialMixer",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "RecurrentScan",
+      "label": "RecurrentScan",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "ChannelMix",
+      "label": "ChannelMix",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "ClassificationHead",
+      "label": "ClassificationHead",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "_DynamicOffset",
+      "label": "_DynamicOffset",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "_TimeMixParams",
+      "label": "_TimeMixParams",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "create_vision_rwkv7",
+      "label": "create_vision_rwkv7",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "DiffSLIC",
+      "label": "DiffSLIC",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "PyTorch",
+      "label": "PyTorch",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "RWKV-7",
+      "label": "RWKV-7",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Superpixel Tokenization",
+      "label": "Superpixel Tokenization",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Graph-Based Q-Shift",
+      "label": "Graph-Based Q-Shift",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Bidirectional Scan",
+      "label": "Bidirectional Scan",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Gated Fusion",
+      "label": "Gated Fusion",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "OkLAB Support",
+      "label": "OkLAB Support",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Interpolatable PosEmbed",
+      "label": "Interpolatable PosEmbed",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Flexible Decay",
+      "label": "Flexible Decay",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Bounded Exponentials",
+      "label": "Bounded Exponentials",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Extra LayerNorm",
+      "label": "Extra LayerNorm",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Layer Scale",
+      "label": "Layer Scale",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Value Residual",
+      "label": "Value Residual",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Modular Decomposition",
+      "label": "Modular Decomposition",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Hilbert-ordered token sequences",
+      "label": "Hilbert-ordered token sequences",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "CLS token",
+      "label": "CLS token",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Stochastic Depth",
+      "label": "Stochastic Depth",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "OkLAB color space",
+      "label": "OkLAB color space",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "KNN graph",
+      "label": "KNN graph",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "6-channel input",
+      "label": "6-channel input",
+      "type": "convention",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Python 3.11+",
+      "label": "Python 3.11+",
+      "type": "convention",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "uv",
+      "label": "uv",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "pytest",
+      "label": "pytest",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "HEAD_SIZE",
+      "label": "HEAD_SIZE = 64",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "TIME_MIX_EXTRA_DIM",
+      "label": "TIME_MIX_EXTRA_DIM = 32",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "Device-agnostic",
+      "label": "Device-agnostic",
+      "type": "convention",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "No training code in core package",
+      "label": "No training code in core package",
+      "type": "convention",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "Public symbols list",
+      "label": "Public symbols list",
+      "type": "convention",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "Dataset caching pattern",
+      "label": "Dataset caching pattern",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "Shuffle sensitivity",
+      "label": "Shuffle sensitivity",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "Numerical Stability",
+      "label": "Numerical Stability",
+      "type": "concept",
+      "confidence": 0.7,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "Single-batch overfit test",
+      "label": "Single-batch overfit test",
+      "type": "workflow",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "Systematic diagnostics",
+      "label": "Systematic diagnostics",
+      "type": "workflow",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "HumorDB training pipeline",
+      "label": "HumorDB training pipeline",
+      "type": "workflow",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "ADE20K training pipeline",
+      "label": "ADE20K training pipeline",
+      "type": "workflow",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "build_knn_graph",
+      "label": "build_knn_graph",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "q_shift_graph_multihead",
+      "label": "q_shift_graph_multihead",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "drop_path",
+      "label": "drop_path",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "DropPath",
+      "label": "DropPath",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "spixel_upsampling",
+      "label": "spixel_upsampling",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "spixel_downsampling",
+      "label": "spixel_downsampling",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "VisualRWKV7 package",
+      "label": "VisualRWKV7 package (spixrwkv7)",
+      "type": "architecture",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "model.py",
+      "label": "model.py",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "diffSLIC.py",
+      "label": "diffSLIC.py",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "utils package",
+      "label": "utils package",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "scripts package",
+      "label": "scripts package",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "fast_test_training.py",
+      "label": "fast_test_training.py",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "diagnose_training.py",
+      "label": "diagnose_training.py",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "CONTRIBUTING.md"
+    },
+    {
+      "id": "train_humordb.py",
+      "label": "train_humordb.py",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "train_ade20k.py",
+      "label": "train_ade20k.py",
+      "type": "component",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "Backward scan mirror",
+      "label": "Backward scan mirror",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "Stateful Block init",
+      "label": "Stateful Block init",
+      "type": "concept",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    },
+    {
+      "id": "Test patterns",
+      "label": "Test patterns (small configs, named_parameters)",
+      "type": "convention",
+      "confidence": 0.9,
+      "source_location": "AGENTS.md"
+    }
+  ],
+  "edges": [
+    {
+      "source": "SpixRWKV-7",
+      "target": "PyTorch",
+      "type": "implemented_in",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "RWKV-7",
+      "type": "adapts",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Vision_RWKV7",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "VisualRWKV7 package",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "scripts package",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "VisualRWKV7 package",
+      "target": "model.py",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "VisualRWKV7 package",
+      "target": "diffSLIC.py",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "VisualRWKV7 package",
+      "target": "utils package",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "Vision_RWKV7",
+      "target": "SuperpixelTokenizer",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "Vision_RWKV7",
+      "target": "Vision_RWKV7_Block",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "Vision_RWKV7",
+      "target": "ClassificationHead",
+      "type": "optionally_contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "Vision_RWKV7_Block",
+      "target": "SpatialMixer",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "Vision_RWKV7_Block",
+      "target": "ChannelMix",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "Vision_RWKV7_Block",
+      "target": "Extra LayerNorm",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "Vision_RWKV7_Block",
+      "target": "Layer Scale",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "Vision_RWKV7_Block",
+      "target": "Value Residual",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "Vision_RWKV7_Block",
+      "target": "Flexible Decay",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "Vision_RWKV7_Block",
+      "target": "Bounded Exponentials",
+      "type": "ensures",
+      "confidence": 0.7
+    },
+    {
+      "source": "Vision_RWKV7_Block",
+      "target": "Stateful Block init",
+      "type": "has_property",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpatialMixer",
+      "target": "Graph-Based Q-Shift",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpatialMixer",
+      "target": "_DynamicOffset",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpatialMixer",
+      "target": "Bidirectional Scan",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpatialMixer",
+      "target": "Gated Fusion",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpatialMixer",
+      "target": "RecurrentScan",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "RecurrentScan",
+      "target": "Delta-rule recurrence",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "RecurrentScan",
+      "target": "RWKV-7",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "RecurrentScan",
+      "target": "Backward scan mirror",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "ChannelMix",
+      "target": "Graph-Based Q-Shift",
+      "type": "uses",
+      "confidence": 0.7
+    },
+    {
+      "source": "SuperpixelTokenizer",
+      "target": "DiffSLIC",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "SuperpixelTokenizer",
+      "target": "SuperpixelEmbedding",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "SuperpixelTokenizer",
+      "target": "KNN graph",
+      "type": "uses",
+      "confidence": 0.9
+    },
+    {
+      "source": "SuperpixelTokenizer",
+      "target": "Hilbert-ordered token sequences",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "SuperpixelTokenizer",
+      "target": "Interpolatable PosEmbed",
+      "type": "includes",
+      "confidence": 0.7
+    },
+    {
+      "source": "SuperpixelEmbedding",
+      "target": "OkLAB color space",
+      "type": "processes",
+      "confidence": 0.7
+    },
+    {
+      "source": "SuperpixelEmbedding",
+      "target": "6-channel input",
+      "type": "processes",
+      "confidence": 0.9
+    },
+    {
+      "source": "ClassificationHead",
+      "target": "Vision_RWKV7",
+      "type": "works_with",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "OkLAB color space",
+      "type": "supports",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "CLS token",
+      "type": "supports",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Stochastic Depth",
+      "type": "supports",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "6-channel input",
+      "type": "requires",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Python 3.11+",
+      "type": "requires",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "uv",
+      "type": "uses_tool",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "pytest",
+      "type": "uses_tool",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "HEAD_SIZE",
+      "type": "defines_constant",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "TIME_MIX_EXTRA_DIM",
+      "type": "defines_constant",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Device-agnostic",
+      "type": "adheres_to",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "No training code in core package",
+      "type": "adheres_to",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Public symbols list",
+      "type": "defines",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Numerical Stability",
+      "type": "ensures",
+      "confidence": 0.7
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Shuffle sensitivity",
+      "type": "exhibits",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Superpixel Tokenization",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Graph-Based Q-Shift",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Bidirectional Scan",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Gated Fusion",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "OkLAB Support",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Interpolatable PosEmbed",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Flexible Decay",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Bounded Exponentials",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Extra LayerNorm",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Layer Scale",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Value Residual",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Modular Decomposition",
+      "type": "has_feature",
+      "confidence": 0.9
+    },
+    {
+      "source": "Single-batch overfit test",
+      "target": "fast_test_training.py",
+      "type": "implemented_by",
+      "confidence": 0.9
+    },
+    {
+      "source": "Systematic diagnostics",
+      "target": "diagnose_training.py",
+      "type": "implemented_by",
+      "confidence": 0.9
+    },
+    {
+      "source": "HumorDB training pipeline",
+      "target": "train_humordb.py",
+      "type": "implemented_by",
+      "confidence": 0.9
+    },
+    {
+      "source": "ADE20K training pipeline",
+      "target": "train_ade20k.py",
+      "type": "implemented_by",
+      "confidence": 0.9
+    },
+    {
+      "source": "Dataset caching pattern",
+      "target": "HumorDB training pipeline",
+      "type": "used_in",
+      "confidence": 0.9
+    },
+    {
+      "source": "Dataset caching pattern",
+      "target": "ADE20K training pipeline",
+      "type": "used_in",
+      "confidence": 0.7
+    },
+    {
+      "source": "Public symbols list",
+      "target": "Vision_RWKV7",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "Vision_RWKV7_Block",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "SuperpixelEmbedding",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "ClassificationHead",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "create_vision_rwkv7",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "build_knn_graph",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "q_shift_graph_multihead",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "HEAD_SIZE",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "drop_path",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "DropPath",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "DiffSLIC",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "spixel_upsampling",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "Public symbols list",
+      "target": "spixel_downsampling",
+      "type": "includes_symbol",
+      "confidence": 0.9
+    },
+    {
+      "source": "SpixRWKV-7",
+      "target": "Test patterns",
+      "type": "follows",
+      "confidence": 0.9
+    },
+    {
+      "source": "build_knn_graph",
+      "target": "KNN graph",
+      "type": "constructs",
+      "confidence": 0.9
+    },
+    {
+      "source": "q_shift_graph_multihead",
+      "target": "Graph-Based Q-Shift",
+      "type": "implements",
+      "confidence": 0.9
+    },
+    {
+      "source": "Vision_RWKV7",
+      "target": "create_vision_rwkv7",
+      "type": "created_by",
+      "confidence": 0.9
+    },
+    {
+      "source": "scripts package",
+      "target": "fast_test_training.py",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "scripts package",
+      "target": "diagnose_training.py",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "scripts package",
+      "target": "train_humordb.py",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "scripts package",
+      "target": "train_ade20k.py",
+      "type": "contains",
+      "confidence": 0.9
+    },
+    {
+      "source": "No training code in core package",
+      "target": "VisualRWKV7 package",
+      "type": "applies_to",
+      "confidence": 0.9
+    },
+    {
+      "source": "Device-agnostic",
+      "target": "SpixRWKV-7",
+      "type": "principle",
+      "confidence": 0.9
+    }
+  ]
+}

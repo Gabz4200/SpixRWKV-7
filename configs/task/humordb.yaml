@@ -1,0 +1,20 @@
+# HumorDB funniness regression task config
+task:
+  name: humordb_regression
+  target: range_ratings_mean
+  scale: 1-10
+
+model: tiny
+
+training:
+  epochs: 20
+  batch_size: 8
+  lr: 5.0e-4
+  weight_decay: 0.0
+  scheduler: cosine
+  warmup_epochs: 2
+
+data:
+  img_size: 64
+  cache_dir: checkpoints/humordb
+  rebuild_cache: false
