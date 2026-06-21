@@ -10,7 +10,7 @@ from spixrwkv7.kernels import (
 )
 from spixrwkv7.layers.drop import DropPath, drop_path
 from spixrwkv7.layers.graph import HEAD_SIZE, build_knn_graph, q_shift_graph_multihead
-from spixrwkv7.spixrwkv7 import (
+from spixrwkv7.models.spixrwkv7 import (
     ChannelMix,
     ClassificationHead,
     RecurrentScan,

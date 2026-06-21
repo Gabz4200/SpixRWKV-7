@@ -4,11 +4,13 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 from typing import Optional, Sequence, Tuple
 
 from hilbertcurve.hilbertcurve import HilbertCurve
 
 from spixrwkv7.data.diff_slic import DiffSLIC, spixel_upsampling
+from spixrwkv7.data.lnsnet import LNSNet, download_lnsnet_weights, lnsnet_assignment
 from spixrwkv7.layers.graph import build_knn_graph, q_shift_graph_multihead, HEAD_SIZE
 from spixrwkv7.layers.drop import DropPath
 
@@ -453,9 +455,10 @@ class ChannelMix(nn.Module):
         sigma: Optional[torch.Tensor] = None,
         head_dim: int = 64,
         with_cls_token: bool = False,
+        h: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         assert sigma is not None, "ChannelMix requires sigma (set by Vision_RWKV7_Block)"
-        xn = self.norm(x)
+        xn = self.norm(h if h is not None else x)
         xs = q_shift_graph_multihead(
             xn,
             neighbors=neighbors,
@@ -489,6 +492,39 @@ class ChannelMix(nn.Module):
 # =====================================================================
 
 
+# =====================================================================
+# Core Block-AttnRes helper
+# =====================================================================
+
+def block_attn_res(
+    blocks: list[torch.Tensor],   # completed blocks  [B, Seq, D] each
+    partial_block: torch.Tensor,  # current intra-block partial sum  [B, Seq, D]
+    proj: nn.Linear,              # learned pseudo-query weight  (d,)
+    norm: nn.Module,              # Norm applied to keys before scoring
+    recency_bias: nn.Parameter,   # scalar bias added to partial_block's logit
+) -> torch.Tensor:
+    """Attend over all block representations + the current partial block."""
+    # Stack everything: shape [N+1, B, Seq, D]
+    V = torch.stack(blocks + [partial_block], dim=0)
+
+    # Keys = normalised values
+    K = norm(V)
+
+    # Scalar logit per (block, batch, token) via the single learned query
+    query = proj.weight.view(-1)                              # (D,)
+    logits = torch.einsum("d, n b t d -> n b t", query, K)   # (N+1, B, T)
+
+    # Recency bias: boost the last element (partial_block)
+    logits[-1] = logits[-1] + recency_bias
+
+    # Softmax across block dimension
+    weights = logits.softmax(dim=0)                           # (N+1, B, T)
+
+    # Weighted sum of values
+    h = torch.einsum("n b t, n b t d -> b t d", weights, V)  # (B, T, D)
+    return h
+
+
 class Vision_RWKV7_Block(nn.Module):
     """Vision-RWKV-7 block composing SpatialMixer and ChannelMix.
 
@@ -513,6 +549,11 @@ class Vision_RWKV7_Block(nn.Module):
         with_cls_token: bool = False,
         norm_layer: str = "layernorm",
         act_layer: str = "relu2",
+        use_attnres: bool = False,
+        attnres_mode: str = "block",
+        attnres_gate_type: str = "bias",
+        attnres_num_blocks: int = 8,
+        attnres_recency_bias_init: float = 10.0,
     ):
         super().__init__()
         self.layer_id = layer_id
@@ -521,6 +562,35 @@ class Vision_RWKV7_Block(nn.Module):
         self.n_head = n_head
         self.head_size = HEAD_SIZE
         self.with_cls_token = with_cls_token
+
+        # Attention Residuals configuration
+        self.use_attnres = use_attnres
+        self.attnres_mode = attnres_mode
+        self.attnres_gate_type = attnres_gate_type
+        self.attnres_num_blocks = attnres_num_blocks
+        self.attnres_recency_bias_init = attnres_recency_bias_init
+
+        if use_attnres:
+            self.attn_res_proj = nn.Linear(n_embd, 1, bias=False)
+            self.attn_res_norm = get_norm_layer(norm_layer)(n_embd)
+            self.attn_res_bias = nn.Parameter(torch.tensor(attnres_recency_bias_init))
+
+            self.mlp_res_proj = nn.Linear(n_embd, 1, bias=False)
+            self.mlp_res_norm = get_norm_layer(norm_layer)(n_embd)
+            self.mlp_res_bias = nn.Parameter(torch.tensor(attnres_recency_bias_init))
+
+            if attnres_gate_type == "sigmoid_scalar":
+                self.attn_res_gate_logit = nn.Parameter(torch.tensor(-2.0))
+                self.mlp_res_gate_logit = nn.Parameter(torch.tensor(-2.0))
+            elif attnres_gate_type == "sigmoid_vector":
+                self.attn_res_gate_proj = nn.Linear(n_embd, n_embd, bias=True)
+                self.mlp_res_gate_proj = nn.Linear(n_embd, n_embd, bias=True)
+            elif attnres_gate_type == "learnable_alpha":
+                self.attn_res_alpha = nn.Parameter(torch.tensor(0.0))
+                self.mlp_res_alpha = nn.Parameter(torch.tensor(0.0))
+
+            layers_per_block = max(1, (n_layer + attnres_num_blocks - 1) // attnres_num_blocks)
+            self.is_block_boundary = ((layer_id + 1) % layers_per_block == 0) or ((layer_id + 1) == n_layer)
 
         # Shared distance-softening scale for graph Q-shift.
         self.sigma = nn.Parameter(torch.full((), 0.1))
@@ -542,6 +612,21 @@ class Vision_RWKV7_Block(nn.Module):
         )
         self._init_weights()
 
+    def _apply_gate(self, partial_block: torch.Tensor, h_attn: torch.Tensor, sublayer: str) -> torch.Tensor:
+        if self.attnres_gate_type == "sigmoid_scalar":
+            logit = self.attn_res_gate_logit if sublayer == "attn" else self.mlp_res_gate_logit
+            gate = torch.sigmoid(logit)
+            return (1 - gate) * partial_block + gate * h_attn
+        elif self.attnres_gate_type == "sigmoid_vector":
+            gate_proj = self.attn_res_gate_proj if sublayer == "attn" else self.mlp_res_gate_proj
+            gate = torch.sigmoid(gate_proj(partial_block))
+            return (1 - gate) * partial_block + gate * h_attn
+        elif self.attnres_gate_type == "learnable_alpha":
+            alpha = self.attn_res_alpha if sublayer == "attn" else self.mlp_res_alpha
+            return (1 - alpha) * partial_block + alpha * h_attn
+        else:
+            return h_attn
+
     def _init_weights(self):
         with torch.no_grad():
             if self.n_layer <= 1:
@@ -557,6 +642,15 @@ class Vision_RWKV7_Block(nn.Module):
             self.spatial_mixer.dynamic_offset.init_weights(ratio_1_to_almost0, ddd)
             self.spatial_mixer.scan.init_weights(ratio_0_to_1, ratio_1_to_almost0, ddd)
 
+            if self.use_attnres:
+                nn.init.zeros_(self.attn_res_proj.weight)
+                nn.init.zeros_(self.mlp_res_proj.weight)
+                if self.attnres_gate_type == "sigmoid_vector":
+                    nn.init.zeros_(self.attn_res_gate_proj.weight)
+                    nn.init.constant_(self.attn_res_gate_proj.bias, -2.0)
+                    nn.init.zeros_(self.mlp_res_gate_proj.weight)
+                    nn.init.constant_(self.mlp_res_gate_proj.bias, -2.0)
+
     def forward(
         self,
         x: torch.Tensor,
@@ -565,10 +659,19 @@ class Vision_RWKV7_Block(nn.Module):
         v_first_fwd: Optional[torch.Tensor] = None,
         v_first_bwd: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
+        attnres_history: Optional[list[torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        if self.layer_id == 0:
-            x = self.ln0(x)
-        xn = self.ln1(x)
+        if self.use_attnres and attnres_history is not None and len(attnres_history) > 0:
+            h_attn = block_attn_res(
+                attnres_history, x,
+                self.attn_res_proj, self.attn_res_norm, self.attn_res_bias
+            )
+            h = self._apply_gate(x, h_attn, "attn")
+            xn = self.ln1(h)
+        else:
+            if self.layer_id == 0:
+                x = self.ln0(x)
+            xn = self.ln1(x)
 
         x, vf_fwd, vf_bwd = self.spatial_mixer(
             x, xn, neighbors, self.sigma, dists,
@@ -576,11 +679,32 @@ class Vision_RWKV7_Block(nn.Module):
             mask=mask,
         )
 
-        x = self.channel_mix(
-            x, neighbors, dists,
-            sigma=self.sigma, head_dim=self.head_size,
-            with_cls_token=self.with_cls_token,
-        )
+        if self.use_attnres and attnres_history is not None:
+            if self.attnres_mode == "full":
+                attnres_history.append(x)
+
+        if self.use_attnres and attnres_history is not None and len(attnres_history) > 0:
+            h_mlp_attn = block_attn_res(
+                attnres_history, x,
+                self.mlp_res_proj, self.mlp_res_norm, self.mlp_res_bias
+            )
+            h = self._apply_gate(x, h_mlp_attn, "mlp")
+            x = self.channel_mix(
+                x, neighbors, dists,
+                sigma=self.sigma, head_dim=self.head_size,
+                with_cls_token=self.with_cls_token,
+                h=h,
+            )
+        else:
+            x = self.channel_mix(
+                x, neighbors, dists,
+                sigma=self.sigma, head_dim=self.head_size,
+                with_cls_token=self.with_cls_token,
+            )
+
+        if self.use_attnres and attnres_history is not None:
+            if self.attnres_mode == "full" or self.is_block_boundary:
+                attnres_history.append(x)
 
         return x, vf_fwd, vf_bwd
 
@@ -622,13 +746,14 @@ class SuperpixelEmbedding(nn.Module):
             nn.Linear(embed_dims, embed_dims),
         )
 
-    def forward(self, x: torch.Tensor, sp_map: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, sp_map: torch.Tensor, K: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         B, C_in, H, W = x.shape
         assert C_in == self.in_chans, f"Expected {self.in_chans} channels, got {C_in}"
 
         # 1. Prepare mask and pooling weights
         if self.mode == "hard":
-            K = int(sp_map.max().item()) + 1
+            if K is None:
+                K = self.num_superpixels
             mask = F.one_hot(sp_map.long(), num_classes=K).permute(0, 3, 1, 2).float()
         else:
             mask = sp_map
@@ -698,6 +823,7 @@ class SuperpixelTokenizer(nn.Module):
         mode: str = "soft",
         use_cpp: bool = False,
         norm_layer: str = "layernorm",
+        spixel_backend: str = "diff_slic",
     ):
         super().__init__()
         self.in_chans = in_chans
@@ -705,15 +831,39 @@ class SuperpixelTokenizer(nn.Module):
         self.num_superpixels = num_superpixels
         self.compactness = compactness
         self.mode = mode
+        self.spixel_backend = spixel_backend
+        self.diff_slic_iters = diff_slic_iters
 
-        self.diff_slic = DiffSLIC(
-            n_spixels=num_superpixels,
-            n_iter=diff_slic_iters,
-            tau=0.01,
-            candidate_radius=1,
-            stable=True,
-            use_cpp=use_cpp,
-        )
+        if spixel_backend == "diff_slic":
+            self.diff_slic = DiffSLIC(
+                n_spixels=num_superpixels,
+                n_iter=diff_slic_iters,
+                tau=0.01,
+                candidate_radius=1,
+                stable=True,
+                use_cpp=use_cpp,
+            )
+        else:
+            self.diff_slic = None
+
+        if spixel_backend == "lnsnet":
+            import os
+            self.lnsnet_model = LNSNet(n_spix=num_superpixels)
+            cache_dir = os.path.expanduser("~/.cache/spixrwkv7")
+            check_path = os.path.join(cache_dir, "lnsnet_BSDS_checkpoint.pth")
+            download_lnsnet_weights(check_path)
+            if os.path.exists(check_path):
+                try:
+                    state_dict = torch.load(check_path, map_location="cpu")
+                    self.lnsnet_model.load_state_dict(state_dict)
+                    print(f"Loaded LNSNet BSDS checkpoint from {check_path}.")
+                except Exception as e:
+                    print(f"WARNING: Failed to load LNSNet checkpoint: {e}. Running with randomly initialized weights.")
+            else:
+                print("WARNING: Checkpoint not found. Running with randomly initialized weights.")
+        else:
+            self.lnsnet_model = None
+
         self.patch_embed = SuperpixelEmbedding(
             in_chans, embed_dims, num_superpixels, mode=mode, norm_layer=norm_layer,
         )
@@ -748,47 +898,118 @@ class SuperpixelTokenizer(nn.Module):
         else:
             n_sp = num_superpixels
 
-        # diffSLIC
-        x_for_slic = torch.cat([x[:, :-2], x[:, -2:] * self.compactness], dim=1)
-        clst_feats, p2s_assign, _ = self.diff_slic(x_for_slic, n_spixels=n_sp)
-        h_s, w_s = clst_feats.shape[-2:]
+        # Determine grid shape
+        height_s = max(1, int(math.sqrt(n_sp * H / W)))
+        width_s = max(1, int(math.sqrt(n_sp * W / H)))
+        h_s, w_s = height_s, width_s
         K = h_s * w_s
-        radius = self.diff_slic.candidate_radius
 
         # Tokenization
         global_soft_mask: Optional[torch.Tensor] = None
         global_labels: Optional[torch.Tensor] = None
 
-        if self.mode == "hard":
-            neighbor_range = 2 * radius + 1
-            hard_assign = (
-                F.one_hot(p2s_assign.argmax(1), neighbor_range**2)
-                .permute(0, 3, 1, 2)
-                .contiguous()
-                .float()
-            )
-            label_grid = (
-                torch.arange(K, dtype=torch.float, device=x.device)
-                .reshape(1, 1, h_s, w_s)
-                .expand(B, -1, -1, -1)
-            )
-            global_labels = (
-                spixel_upsampling(label_grid, hard_assign, candidate_radius=radius)
-                .squeeze(1)
-                .long()
-            )
-            tokens, centroids = self.patch_embed(x, global_labels)
+        if self.spixel_backend == "diff_slic":
+            # diffSLIC
+            x_for_slic = torch.cat([x[:, :-2], x[:, -2:] * self.compactness], dim=1)
+            assert self.diff_slic is not None
+            clst_feats, p2s_assign, _ = self.diff_slic(x_for_slic, n_spixels=n_sp)
+            h_s, w_s = clst_feats.shape[-2:]
+            K = h_s * w_s
+            radius = self.diff_slic.candidate_radius
+
+            if self.mode == "hard":
+                neighbor_range = 2 * radius + 1
+                hard_assign = (
+                    F.one_hot(p2s_assign.argmax(1), neighbor_range**2)
+                    .permute(0, 3, 1, 2)
+                    .contiguous()
+                    .float()
+                )
+                label_grid = (
+                    torch.arange(K, dtype=torch.float, device=x.device)
+                    .reshape(1, 1, h_s, w_s)
+                    .expand(B, -1, -1, -1)
+                )
+                global_labels = (
+                    spixel_upsampling(label_grid, hard_assign, candidate_radius=radius)
+                    .squeeze(1)
+                    .long()
+                )
+                tokens, centroids = self.patch_embed(x, global_labels, K=K)
+            else:
+                spixel_ids = (
+                    torch.arange(K, device=x.device)
+                    .reshape(1, K, 1, 1)
+                    .expand(B, -1, h_s, w_s)
+                    .float()
+                )
+                global_soft_mask = spixel_upsampling(
+                    spixel_ids, p2s_assign, candidate_radius=radius
+                )
+                tokens, centroids = self.patch_embed(x, global_soft_mask)
+        elif self.spixel_backend == "lnsnet":
+            # LNSNet
+            x_lnsnet = torch.cat([x[:, :3], x[:, 4:6]], dim=1)
+            x_lnsnet = (x_lnsnet - x_lnsnet.mean(dim=(2, 3), keepdim=True)) / (x_lnsnet.std(dim=(2, 3), keepdim=True) + 1e-6)
+
+            assert self.lnsnet_model is not None
+            cx, cy, f, probs = self.lnsnet_model(x_lnsnet)
+            
+            # Recalculate grid shape K based on actual seed count generated
+            S = H * W / n_sp
+            sp_h = max(1, int(math.floor(math.sqrt(S) / (W / float(H)))))
+            sp_w = max(1, int(math.floor(S / math.floor(sp_h))))
+            h_s = int(math.ceil(H / sp_h))
+            w_s = int(math.ceil(W / sp_w))
+            K = h_s * w_s
+
+            p2s_assign = lnsnet_assignment(f, x_lnsnet, cx, cy) # shape (B, K, H, W)
+            
+            if self.mode == "hard":
+                global_labels = p2s_assign.argmax(dim=1) # shape (B, H, W)
+                tokens, centroids = self.patch_embed(x, global_labels, K=K)
+            else:
+                global_soft_mask = p2s_assign # shape (B, K, H, W)
+                tokens, centroids = self.patch_embed(x, global_soft_mask)
+        elif self.spixel_backend == "grid":
+            grid_y = torch.arange(H, device=x.device) * h_s // H
+            grid_x = torch.arange(W, device=x.device) * w_s // W
+            gy, gx = torch.meshgrid(grid_y, grid_x, indexing="ij")
+            global_labels = (gy * w_s + gx).unsqueeze(0).expand(B, -1, -1).long()
+
+            if self.mode == "hard":
+                tokens, centroids = self.patch_embed(x, global_labels, K=K)
+            else:
+                global_soft_mask = F.one_hot(global_labels, num_classes=K).permute(0, 3, 1, 2).float()
+                tokens, centroids = self.patch_embed(x, global_soft_mask)
+        elif self.spixel_backend in ("slic", "slico"):
+            import skimage.segmentation as seg
+            import numpy as np
+            labels_list = []
+            comp = self.compactness * 20.0
+            slic_zero = (self.spixel_backend == "slico")
+            for i in range(B):
+                img_np = x[i, :3].permute(1, 2, 0).detach().cpu().numpy()
+                lbls = seg.slic(
+                    img_np,
+                    n_segments=K,
+                    compactness=comp,
+                    max_num_iter=self.diff_slic_iters,
+                    slic_zero=slic_zero,
+                    start_label=0,
+                    enforce_connectivity=True,
+                )
+                lbls = np.clip(lbls, 0, K - 1)
+                labels_list.append(torch.from_numpy(lbls).to(device=x.device, dtype=torch.long))
+            global_labels = torch.stack(labels_list, dim=0)
+
+            if self.mode == "hard":
+                tokens, centroids = self.patch_embed(x, global_labels, K=K)
+            else:
+                global_soft_mask = F.one_hot(global_labels, num_classes=K).permute(0, 3, 1, 2).float()
+                tokens, centroids = self.patch_embed(x, global_soft_mask)
         else:
-            spixel_ids = (
-                torch.arange(K, device=x.device)
-                .reshape(1, K, 1, 1)
-                .expand(B, -1, h_s, w_s)
-                .float()
-            )
-            global_soft_mask = spixel_upsampling(
-                spixel_ids, p2s_assign, candidate_radius=radius
-            )
-            tokens, centroids = self.patch_embed(x, global_soft_mask)
+            raise ValueError(f"Unknown spixel_backend: {self.spixel_backend}")
 
         # KNN graph + Hilbert reorder
         neighbors, neighbor_dists = build_knn_graph(centroids.detach(), k=4)
@@ -847,6 +1068,12 @@ class Vision_RWKV7(nn.Module):
         use_cpp: bool = False,
         norm_layer: str = "layernorm",
         act_layer: str = "relu2",
+        spixel_backend: str = "diff_slic",
+        use_attnres: bool = False,
+        attnres_mode: str = "block",
+        attnres_gate_type: str = "bias",
+        attnres_num_blocks: int = 8,
+        attnres_recency_bias_init: float = 10.0,
         **kwargs,
     ):
         super().__init__()
@@ -860,6 +1087,16 @@ class Vision_RWKV7(nn.Module):
         self.in_chans = in_chans
         self.num_superpixels = num_superpixels
         self.spixel_size = spixel_size
+        self.spixel_backend = spixel_backend
+
+        # Attention Residuals configuration
+        self.use_attnres = use_attnres
+        self.attnres_mode = attnres_mode
+        self.attnres_gate_type = attnres_gate_type
+        self.attnres_num_blocks = attnres_num_blocks
+        self.attnres_recency_bias_init = attnres_recency_bias_init
+        self.last_attnres_history = None
+        self.last_project_fn = None
 
         # Dynamic calculation of num_heads if not provided
         if num_heads is None:
@@ -878,6 +1115,7 @@ class Vision_RWKV7(nn.Module):
             mode="soft",
             use_cpp=use_cpp,
             norm_layer=norm_layer,
+            spixel_backend=spixel_backend,
         )
         # Keep patch_embed as a public alias for backward compat (tests access .patch_embed.mode)
         self.patch_embed = self.tokenizer.patch_embed
@@ -947,6 +1185,11 @@ class Vision_RWKV7(nn.Module):
                     with_cls_token=with_cls_token,
                     norm_layer=norm_layer,
                     act_layer=act_layer,
+                    use_attnres=self.use_attnres,
+                    attnres_mode=self.attnres_mode,
+                    attnres_gate_type=self.attnres_gate_type,
+                    attnres_num_blocks=self.attnres_num_blocks,
+                    attnres_recency_bias_init=self.attnres_recency_bias_init,
                 )
                 for i in range(depth)
             ]
@@ -1039,16 +1282,32 @@ class Vision_RWKV7(nn.Module):
 
         # Register tokens - prepended to sequence (DINOv2-style)
         if self.register_tokens > 0:
+            assert self.reg_token is not None
             reg_tokens = self.reg_token.expand(B, -1, -1)
             tokens = torch.cat((reg_tokens, tokens), dim=1)
 
         # ---- RWKV-7 Blocks ----
         outs: list = []
         vf_fwd, vf_bwd = None, None
+        attnres_history = [tokens] if self.use_attnres else None
+
+        def get_patches(toks):
+            if self.with_cls_token:
+                toks = toks[:, :-1]
+            if self.register_tokens > 0:
+                toks = toks[:, self.register_tokens:]
+            return toks
+
         for i, block in enumerate(self.blocks):
-            tokens, vff, vfb = block(
-                tokens, neighbors, neighbor_dists, vf_fwd, vf_bwd, mask=sorted_mask
-            )
+            if self.use_attnres:
+                tokens, vff, vfb = block(
+                    tokens, neighbors, neighbor_dists, vf_fwd, vf_bwd, mask=sorted_mask,
+                    attnres_history=attnres_history
+                )
+            else:
+                tokens, vff, vfb = block(
+                    tokens, neighbors, neighbor_dists, vf_fwd, vf_bwd, mask=sorted_mask
+                )
             if i == 0:
                 vf_fwd, vf_bwd = vff, vfb
             if i == len(self.blocks) - 1 and self.final_norm:
@@ -1079,6 +1338,15 @@ class Vision_RWKV7(nn.Module):
                 else:
                     outs.append(feat)
 
+        if self.use_attnres:
+            self.last_attnres_history = attnres_history
+            self.last_attnres_history_patches = [get_patches(t) for t in attnres_history] if attnres_history is not None else None
+            self.last_project_fn = lambda patch_tokens: self._project_output(
+                patch_tokens, inv_order, batch_idx,
+                global_soft_mask, global_labels,
+                H, W, h_s, w_s,
+            )
+
         return tuple(outs)
 
 
@@ -1101,9 +1369,32 @@ class ClassificationHead(nn.Module):
         self.norm = get_norm_layer(norm_layer)(embed_dims)
         self.head = nn.Linear(embed_dims, num_classes)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Attention Residuals components for classification head
+        self.out_res_proj = nn.Linear(embed_dims, 1, bias=False)
+        self.out_res_norm = get_norm_layer(norm_layer)(embed_dims)
+        self.out_res_bias = nn.Parameter(torch.tensor(10.0))
+        nn.init.zeros_(self.out_res_proj.weight)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        attnres_history: Optional[list[torch.Tensor]] = None,
+        project_fn = None,
+    ) -> torch.Tensor:
         # x: (B, embed_dims, h, w) from backbone output tuple entry
-        x = x.mean(dim=[-2, -1])  # global average pool over spatial dims
+        if attnres_history is not None and len(attnres_history) > 0 and project_fn is not None:
+            # V: (L, B, SeqLen, D)
+            V = torch.stack(attnres_history, dim=0)
+            K = self.out_res_norm(V)
+            query = self.out_res_proj.weight.view(-1)
+            logits = torch.einsum("d, l b s d -> l b s", query, K)
+            logits[-1] = logits[-1] + self.out_res_bias
+            weights = logits.softmax(dim=0)
+            h = torch.einsum("l b s, l b s d -> b s d", weights, V)
+            feat = project_fn(h)
+            x = feat.mean(dim=[-2, -1])
+        else:
+            x = x.mean(dim=[-2, -1])  # global average pool over spatial dims
         x = self.norm(x)
         return self.head(x)
 
@@ -1127,6 +1418,12 @@ def create_vision_rwkv7(
     register_tokens: int = 0,
     norm_layer: str = "layernorm",
     act_layer: str = "relu2",
+    spixel_backend: str = "diff_slic",
+    use_attnres: bool = False,
+    attnres_mode: str = "block",
+    attnres_gate_type: str = "bias",
+    attnres_num_blocks: int = 8,
+    attnres_recency_bias_init: float = 10.0,
 ) -> Vision_RWKV7:
     """
     Creates a Vision_RWKV7 model enforced to 6-channel input (L, a, b, alpha, x, y).
@@ -1152,4 +1449,10 @@ def create_vision_rwkv7(
         register_tokens=register_tokens,
         norm_layer=norm_layer,
         act_layer=act_layer,
+        spixel_backend=spixel_backend,
+        use_attnres=use_attnres,
+        attnres_mode=attnres_mode,
+        attnres_gate_type=attnres_gate_type,
+        attnres_num_blocks=attnres_num_blocks,
+        attnres_recency_bias_init=attnres_recency_bias_init,
     )

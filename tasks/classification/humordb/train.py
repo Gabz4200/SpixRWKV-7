@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+from typing import Optional
 import json
 import math
 import random
@@ -186,9 +187,32 @@ class RegressionHead(nn.Module):
         self.norm = nn.LayerNorm(embed_dims)
         self.head = nn.Linear(embed_dims, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Attention Residuals parameters for regression head
+        self.out_res_proj = nn.Linear(embed_dims, 1, bias=False)
+        self.out_res_norm = nn.LayerNorm(embed_dims)
+        self.out_res_bias = nn.Parameter(torch.tensor(10.0))
+        nn.init.zeros_(self.out_res_proj.weight)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        attnres_history: Optional[list[torch.Tensor]] = None,
+        project_fn = None,
+    ) -> torch.Tensor:
         # x: (B, embed_dims, H_spatial, W_spatial)
-        x = x.mean(dim=[-2, -1])  # global average pool
+        if attnres_history is not None and len(attnres_history) > 0 and project_fn is not None:
+            # V: (L, B, SeqLen, D)
+            V = torch.stack(attnres_history, dim=0)
+            K = self.out_res_norm(V)
+            query = self.out_res_proj.weight.view(-1)
+            logits = torch.einsum("d, l b s d -> l b s", query, K)
+            logits[-1] = logits[-1] + self.out_res_bias
+            weights = logits.softmax(dim=0)
+            h = torch.einsum("l b s, l b s d -> b s d", weights, V)
+            feat = project_fn(h)
+            x = feat.mean(dim=[-2, -1])
+        else:
+            x = x.mean(dim=[-2, -1])  # global average pool
         x = self.norm(x)
         return self.head(x).squeeze(-1)  # (B,)
 
@@ -207,7 +231,9 @@ class HumorRegressor(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         outs = self.backbone(x)          # tuple of tensors, one per out_indices
         feat = outs[0]                   # (B, embed_dims, H_spatial, W_spatial)
-        return self.head(feat)           # (B,)
+        attnres_history = getattr(self.backbone, "last_attnres_history_patches", None)
+        project_fn = getattr(self.backbone, "last_project_fn", None)
+        return self.head(feat, attnres_history=attnres_history, project_fn=project_fn)
 
 
 # =====================================================================

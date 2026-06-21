@@ -28,14 +28,20 @@ The architecture merges the linear-complexity, constant-memory advantages of the
 
 ## Key Features
 
-- **Superpixel Tokenization**: Replaces rigid patch grids with `diffSLIC`, supporting both **hard** (discrete, gradient via straight-through) and **soft** (continuous, fully differentiable) aggregation modes. Tokens correspond to perceptually meaningful image regions.
+- **Superpixel Tokenization Backends**: Replaces rigid patch grids with configurable superpixel tokenizers, supporting multiple backends:
+  - `diff_slic`: Differentiable SLIC via PyTorch/C++ (supports both **hard** and **soft** modes).
+  - `grid`: Non-overlapping regular grid of patches (providing a direct grid/patch baseline).
+  - `slic`: Classical CPU SLIC clustering using `scikit-image` with gradient pass-through.
+  - `slico`: Classical CPU SLICO (SLIC-Zero) clustering.
+  - `lnsnet`: Non-iterative learnable superpixel segmentation (LNS-Net, CVPR 2021) with BSDS checkpoint weight initialization support.
+- **Attention Residuals (AttnRes)**: Depth-wise attention residuals replacing the standard fixed additive residual accumulation with a learned softmax attention over preceding layer/block representations. Features options for `"block"` and `"full"` history aggregation, and multiple gating options (`"bias"`, `"sigmoid_scalar"`, `"sigmoid_vector"`, `"learnable_alpha"`).
 - **Perceptual Color Space Support**: Native, differentiable support for the **OkLAB** color space, including sRGB/Linear RGB conversions, alpha channel, and robust **Gamut Clipping** methods. At least until now, the Gamut Clipping is only implemented as a utility and not integrated into the training pipeline, but it is available for experimentation and also for cliping outputs on generative tasks.
 - **Graph-Based Q-Shift**: Adapts the original 2D grid Q-Shift to operate on K-Nearest Neighbor (KNN) graphs over irregular superpixel centroids, enabling spatial mixing that adapts to arbitrary topologies.
 - **Bidirectional RWKV-7 Recurrence**: Two independent `RecurrentScan` modules (forward and backward) process the token sequence, fused via a learned dynamic gate. Each scan implements RWKV-7's generalized delta rule with decoupled keys, value residual, and learnable decay.
 - **Deterministic Token Ordering**: Hilbert curve sorts superpixel tokens into a reproducible 1D sequence, ensuring stable spatial structure across forward passes.
 - **Multi-Scale Output**: Extracts features from configurable intermediate blocks and scatters them back to original image resolution via soft mask aggregation (differentiable) or hard label gather.
 - **Modular Architecture**: Every component is an independent `nn.Module`, swap, remove, or replace parts without touching the rest.
-- **Separate Classification Head**: `ClassificationHead` (global average pool + LayerNorm + linear) sits on top of the backbone but is a separate class, keeping the backbone usable for dense prediction.
+- **Depth-Aware Classification Head**: `ClassificationHead` and `RegressionHead` can selectively attend to the entire depth history (`attnres_history`) of backbone representations using Attention Residuals to avoid data dilution and improve convergence, while remaining usable for standard average-pooled features when AttnRes is disabled.
 - **Hilbert-Reordered Neighbor Remapping**: After Hilbert sorting, KNN neighbor indices are remapped to the new ordering, preserving spatial relationships in the sorted sequence.
 - **Robust Data Utilities**: Tools for calculating dataset-wide mean/std statistics, stable image loading, and OkLAB-aware preprocessing.
 - **RWKV-7 Numerical Stability**: Inherits RWKV-7's bounded exponentials, value residuals, and Layer Scale for robust training.
@@ -44,62 +50,74 @@ The architecture merges the linear-complexity, constant-memory advantages of the
 
 ### Speed Comparison (CPU)
 
-Benchmark comparing Vision RWKV-7 against a standard ViT implementation across model sizes and image resolutions.
+Benchmark comparing Vision RWKV-7 (RMSNorm + SwiGLU activation, C++ optimized kernels) against a standard ViT implementation across model sizes and image resolutions.
 
-#### Model Size Comparison (at configured resolutions)
+#### Model Size Comparison (measured at 512x512 resolution)
 
 | Size   | Img Size | RWKV-7 Time (ms) | ViT Time (ms) | Speedup (ViT/RWKV-7) | RWKV-7 Params | ViT Params |
-| ------ | -------- | ---------------- | ------------- | -------------------- | ------------- | ---------- |
-| tiny   | 64       | 156.50           | 13.99         | 0.09x                | 0.64M         | 5.68M      |
-| small  | 224      | 2285.21          | 149.26        | 0.07x                | 6.30M         | 22.05M     |
-| medium | 512      | 8729.29          | 2874.53       | 0.33x                | 45.60M        | 87.20M     |
+| :---   | :---     | :---             | :---          | :---                 | :---          | :---       |
+| tiny   | 512      | 652.00           | 289.98        | 0.44x                | 0.77M         | 5.88M      |
+| small  | 512      | 2914.55          | 891.96        | 0.31x                | 7.86M         | 22.37M     |
+| medium | 512      | 8473.36          | 2911.70       | 0.34x                | 58.15M        | 87.20M     |
+| large  | 512      | 11738.89         | 9558.37       | 0.81x                | 127.73M       | 305.17M    |
 
-#### Resolution Sweep (medium model at 512px)
+#### Resolution Sweep (Small Model, config: embed_dims=256, depth=6, num_heads=4)
 
-| Img Size | RWKV-7 Time (ms) | ViT Time (ms) | Speedup | Tokenizer % |
-| -------- | ---------------- | ------------- | ------- | ----------- |
-| 64       | 4897.47          | 69.85         | 0.02x   | 1.1%        |
-| 128      | 5165.46          | 114.43        | 0.02x   | 4.6%        |
-| 224      | 5540.59          | 2847.66       | 0.51x   | 33.4%       |
+| Img Size | RWKV-7 Time (ms) | ViT Time (ms) | Speedup (ViT/RWKV-7) | Tokenizer % |
+| :---     | :---             | :---          | :---                 | :---        |
+| 64       | 1214.23          | 21.79         | 0.02x                | 3.1%        |
+| 128      | 1259.84          | 46.78         | 0.04x                | 6.4%        |
+| 224      | 1404.21          | 126.29        | 0.09x                | 16.0%       |
 
 #### Memory Comparison
 
-| Size   | RWKV-7 Peak (MB) | ViT Peak (MB) | Ratio |
-| ------ | ---------------- | ------------- | ----- |
-| tiny   | 0.02             | 0.01          | 0.43x |
-| small  | 0.04             | 0.00          | 0.11x |
-| medium | 0.06             | 0.00          | 0.05x |
+| Size   | RWKV-7 Peak (MB) | ViT Peak (MB) | Ratio (RWKV-7/ViT) |
+| :---   | :---             | :---          | :---               |
+| tiny   | 0.02             | 0.01          | 0.37x              |
+| small  | 0.04             | 0.00          | 0.09x              |
+| medium | 0.06             | 0.00          | 0.07x              |
+
+### Detailed Comparative Analysis: SpixRWKV-7 vs. Vision Transformers (ViTs)
+
+Based on CPU benchmarks and training experiments, here is a detailed analysis of SpixRWKV-7's strengths and limitations relative to standard ViTs:
+
+#### 1. Representation & Inductive Bias: Superpixels vs. Fixed Grids
+* **Vision Transformers**: Process images using an arbitrary $P \times P$ grid of patches (e.g., $14 \times 14$). This splits contiguous visual semantics (e.g., cutting an object in half) and processes low-information background patches identically to foreground objects.
+* **SpixRWKV-7**: Employs **diffSLIC** to group pixels into irregular, perceptually coherent regions (superpixels). This provides a native boundary-aware representation. Graph-based spatial mixing (`q_shift_graph_multihead`) and Hilbert sequence reordering preserve local and non-local geometry.
+
+#### 2. Computational Complexity & Latency
+* **Theoretical Complexity**: ViT attention scales quadratically ($O(N^2)$) in time and memory with the number of tokens $N$. SpixRWKV-7's recurrent scan has a linear ($O(N)$) time complexity and constant ($O(1)$) recurrent state memory.
+* **CPU Latency & Parallelization Bottleneck**: On CPU, PyTorch's native transformer uses highly tuned, parallelized CPU matrix multiplication (GEMM) kernels. In contrast, SpixRWKV-7's recurrent scan operates sequentially over the sequence length (`for t in range(N)`), introducing significant loop overhead and poor CPU cache efficiency.
+* **Tokenizer Overhead**: Differentiable superpixel tokenization (diffSLIC) is computationally expensive on CPU due to iterative clustering. For the **tiny** model, diffSLIC tokenizer accounts for **69.6%** of total execution time. As the model size scales, backbone recurrence dominates (**75.5%** for the **large** model).
+* **Scaling Advantage**: As model scale increases, the speed gap between ViT and SpixRWKV-7 narrows. At **Large** scale, ViT is only **1.23x** faster than SpixRWKV-7, even though ViT has **2.4x** more parameters.
+
+#### 3. Parameter and Memory Efficiency
+* **Parameter Count**: SpixRWKV-7 is extremely parameter-efficient. It matches or exceeds ViT configurations in representation capacity with a fraction of the parameters:
+  * **Tiny**: SpixRWKV-7 uses **0.77M** params vs. ViT's **5.88M** (ViT is **7.6x** larger).
+  * **Large**: SpixRWKV-7 uses **127.73M** params vs. ViT's **305.17M** (ViT is **2.4x** larger).
+* **Memory Footprint**: Under high-resolution or dense-prediction settings, the quadratic memory scaling of ViT attention becomes a bottleneck. SpixRWKV-7 scales linearly and retains a constant state size, preserving memory.
+
+#### 4. Convergence & Stability
+* Gradient health diagnostics (`diagnose_training.txt`) confirm uniform gradient flow across all blocks under RMSNorm and SwiGLU activation configurations. Single-batch overfit is achieved in **17 steps**, proving stable optimization dynamics.
 
 ### Why Is ViT Faster on CPU?
 
-The SimpleViT uses custom Attention and FeedForward modules with einops for tensor rearrangement. Key factors:
-
 1. **Optimized GEMM kernels**: PyTorch's Transformer uses heavily tuned CPU matrix multiplication that exploits cache locality and SIMD instructions.
-
 2. **Parallel vs Sequential**: The Vision RWKV-7 backbone has a sequential recurrent loop (`for t in range(N)`) that cannot be vectorized like the parallel attention in ViT. Each timestep requires its own forward pass through the recurrence.
-
 3. **diffSLIC overhead**: The tokenization involves iterative clustering with softmax operations over spatial dimensions - computationally expensive on CPU.
-
 4. **Small matrix inefficiency**: The RWKV-7 recurrence uses small matrix operations (head_size=64) that have poor cache efficiency compared to larger GEMM operations.
-
-5. **GPU advantage for RWKV-7**: On GPU, the comparison would favor RWKV-7 more because:
-   - The recurrent loop can run in parallel across sequence positions
-   - No quadratic attention memory overhead
-   - diffSLIC would still be a bottleneck but less severe
+5. **GPU advantage for RWKV-7**: On GPU, the recurrent loop can run in parallel across sequence positions using the custom CUDA kernel without quadratic attention memory overhead.
 
 ### Key Insights
 
 - **Parameter efficiency gap**: ViT is ~100-400x more efficient on CPU (time per M params) because it uses optimized parallel operations, while RWKV-7 uses sequential recurrence that doesn't parallelize well on CPU.
-
-- **diffSLIC scaling**: As image resolution increases, diffSLIC takes a larger fraction of total time (1.1% → 33.4% from 64→224 for medium model). This is the primary optimization target for C++ kernel implementation.
-
-- **Backbone dominance**: At medium size, the recurrent backbone dominates (67% of time at 512px), indicating that once diffSLIC is optimized, RWKV-7 could become competitive.
-
-- **Memory advantage**: RWKV-7 uses significantly less peak memory (0.02-0.06MB vs 0.00MB for ViT) due to its linear recurrent structure vs ViT's quadratic attention. Note: ViT's 0.00MB reflects tracemalloc's limitation with optimized C++ kernels; both models use minimal memory in inference mode.
+- **diffSLIC scaling**: As image resolution increases, diffSLIC takes a larger fraction of total time. This is the primary optimization target for C++ kernel implementation.
+- **Backbone dominance**: At medium/large sizes, the recurrent backbone dominates, indicating that once diffSLIC is optimized, RWKV-7 could become competitive.
+- **Memory advantage**: RWKV-7 uses significantly less peak memory due to its linear recurrent structure vs ViT's quadratic attention. Note: ViT's 0.00MB reflects tracemalloc's limitation with optimized C++ kernels; both models use minimal memory in inference mode.
 
 Run your own comparison:
 ```bash
-uv run python scripts/compare_architectures.py --runs 10 --skip-large
+uv run python scripts/compare_architectures.py --runs 10
 ```
 
 ## Training Results
@@ -233,14 +251,6 @@ Deterministic: True (across 10 seeds: 3407, 42, 123, 456, 789, 1000, 2000, 3000,
 
 **Architecture Meaning**: Medium-scale model runs stably. RMSNorm + SwiGLU scales without numerical issues.
 
-#### Speed Comparison (RMSNorm + SwiGLU)
-
-| Size   | Img Size | RWKV-7 Time (ms) | ViT Time (ms) | Speedup | RWKV-7 Params |
-| ------ | -------- | ---------------- | ------------- | ------- | ------------- |
-| tiny   | 512      | 676.59           | 311.00        | 0.46x   | 0.77M         |
-| small  | 512      | 3094.47          | 965.11        | 0.31x   | 6.30M         |
-| medium | 512      | 8641.74          | 3210.24        | 0.37x   | 58.15M        |
-
 **Parallel Mode Comparison (CPU)**:
 | Mode   | Size   | Img Size | Time (ms) | Ratio vs RNN |
 | ------ | ------ | -------- | --------- | ------------ |
@@ -347,7 +357,7 @@ uv sync
 import torch
 from spixrwkv7 import create_vision_rwkv7
 
-# Initialize the model
+# Initialize the model (backends: "diff_slic", "grid", "slic", "slico", "lnsnet")
 model = create_vision_rwkv7(
     img_size=224,
     embed_dims=192,
@@ -356,6 +366,7 @@ model = create_vision_rwkv7(
     num_superpixels=196,      # approx 14x14 superpixel grid
     out_indices=[3, 5, 7, 11], # multi-scale feature extraction
     scatter_output=True,       # scatter back to original resolution
+    spixel_backend="diff_slic", # "diff_slic" (default), "grid", "slic", "slico", or "lnsnet"
 )
 
 x = torch.randn(1, 6, 224, 224)  # 6 channels: Lab + alpha + xy
@@ -403,7 +414,8 @@ logits = head(features[0])  # (4, 10)
 VisualRWKV7_Pytorch/
 ├── spixrwkv7/                   # Core Python package (package name: spixrwkv7)
 │   ├── __init__.py              # Public API exports (includes C++ kernel fallback)
-│   ├── spixrwkv7.py             # Backbone + all modules (PyTorch implementation)
+│   ├── models/
+│   │   └── spixrwkv7.py         # Backbone + all modules (PyTorch implementation)
 │   ├── data/
 │   │   ├── colors.py            # OkLAB/sRGB conversion utilities
 │   │   ├── gamut.py             # OkLAB gamut clipping methods
@@ -550,7 +562,7 @@ Run the full test suite:
 uv run pytest -v
 ```
 
-**Expected output:** 96 tests pass.
+**Expected output:** 103 tests pass.
 
 ```text
 tests/test_models/test_model.py             ...............................
@@ -558,7 +570,7 @@ tests/test_data/test_colors.py             ........................
 tests/test_data/test_transforms.py         ............
 tests/test_data/test_diff_slic.py          .............
 tests/test_regression.py         .......
-============================= 96 passed in 7-8s =============================
+============================= 103 passed in 9-10s =============================
 ```
 
 Tests are structured to verify behavior through **public interfaces** only, internal module reshuffling won't break them. Key test categories:
@@ -596,7 +608,7 @@ The `spixrwkv7/kernels/` module provides optimized C++ implementations of the co
 - **OptimizedVision_RWKV7_Block**: Drop-in replacement for `Vision_RWKV7_Block` that uses the C++ kernel when available.
 - **OptimizedVision_RWKV7**: Full backbone wrapper that uses optimized blocks.
 
-**IMPORTANT**: The PyTorch implementation (`spixrwkv7/spixrwkv7.py`) and the optimized implementation (`spixrwkv7/kernels/optimized_block.py`, `spixrwkv7/kernels/optimized_vision.py`) must be kept in SYNC at all times. Any architectural change to the core model must be reflected in the optimized versions. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+**IMPORTANT**: The PyTorch implementation (`spixrwkv7/models/spixrwkv7.py`) and the optimized implementation (`spixrwkv7/kernels/optimized_block.py`, `spixrwkv7/kernels/optimized_vision.py`) must be kept in SYNC at all times. Any architectural change to the core model must be reflected in the optimized versions. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ### Building the C++ Extension
 

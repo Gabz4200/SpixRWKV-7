@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+from typing import Optional
 import math
 import sys
 import time
@@ -187,12 +188,39 @@ class SegHead(nn.Module):
         self.head = nn.Conv2d(embed_dims, num_classes, kernel_size=1, bias=False)
         self._init_weights()
 
+        # Attention Residuals parameters for segmentation head
+        self.out_res_proj = nn.Linear(embed_dims, 1, bias=False)
+        self.out_res_norm = nn.BatchNorm2d(embed_dims)
+        self.out_res_bias = nn.Parameter(torch.tensor(10.0))
+        nn.init.zeros_(self.out_res_proj.weight)
+
     def _init_weights(self):
         nn.init.normal_(self.head.weight, std=0.01)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        attnres_history: Optional[list[torch.Tensor]] = None,
+        project_fn = None,
+    ) -> torch.Tensor:
         if isinstance(x, (tuple, list)):
             x = x[-1]
+
+        if attnres_history is not None and len(attnres_history) > 0 and project_fn is not None:
+            # Project all 3D tensors in the history to 4D (B, D, H, W)
+            projected = [project_fn(h) for h in attnres_history]
+            V = torch.stack(projected, dim=0)  # (L, B, D, H, W)
+            
+            L, B, D, H, W = V.shape
+            K = self.out_res_norm(V.view(L * B, D, H, W)).view(L, B, D, H, W)
+            
+            query = self.out_res_proj.weight.view(-1)
+            logits = torch.einsum("d, l b d h w -> l b h w", query, K)  # (L, B, H, W)
+            logits[-1] = logits[-1] + self.out_res_bias
+            
+            weights = logits.softmax(dim=0)  # (L, B, H, W)
+            x = torch.einsum("l b h w, l b d h w -> b d h w", weights, V)
+
         return self.head(self.norm(x))
 
 
@@ -224,7 +252,9 @@ class ADE20KSegModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         features = self.backbone(x)
-        return self.seg_head(features)
+        attnres_history = getattr(self.backbone, "last_attnres_history_patches", None)
+        project_fn = getattr(self.backbone, "last_project_fn", None)
+        return self.seg_head(features, attnres_history=attnres_history, project_fn=project_fn)
 
 
 # =====================================================================

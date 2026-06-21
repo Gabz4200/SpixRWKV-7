@@ -3,6 +3,12 @@
 import argparse
 import random
 import os
+import sys
+from pathlib import Path
+
+# Add project root for direct execution
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))
 
 import numpy as np
 import torch
@@ -26,6 +32,8 @@ def main():
     parser.add_argument("--diff-slic-iters", type=int, default=5)
     parser.add_argument("--norm-layer", type=str, default="rmsnorm")
     parser.add_argument("--act-layer", type=str, default="swiglu")
+    parser.add_argument("--spixel-backend", type=str, default="diff_slic", choices=["diff_slic", "grid", "slic", "slico", "lnsnet"])
+    parser.add_argument("--use-attnres", action="store_true", help="Enable Attention Residuals")
     parser.add_argument("--output", type=str, default="results/demo.txt")
     args = parser.parse_args()
 
@@ -49,6 +57,8 @@ def main():
             diff_slic_iters=args.diff_slic_iters,
             norm_layer=args.norm_layer,
             act_layer=args.act_layer,
+            spixel_backend=args.spixel_backend,
+            use_attnres=args.use_attnres,
         )
 
         # Model created on CPU, then moved to device (standard PyTorch pattern)

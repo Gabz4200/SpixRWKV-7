@@ -8,27 +8,36 @@
   Embed dims     128
   Heads          2
   Depth          2
-  Superpixels    8
-  Total params   773,661
-  Train params   773,661
+  Superpixels    16
+  Total params   775,074
+  Train params   775,074
   Optimizer      AdamW (lr=0.0005, wd=0.0)
-  Max steps      1
+  Max steps      100
   Target acc     95%
 ------------------------------------------------------------------------
    Step      Loss     Acc  GradNorm  Time/step
 ------------------------------------------------------------------------
-      1    2.0477   25.0%      7.44     953.1ms
+      1    2.2916   25.0%     11.27     227.5ms
+      5    1.5544   50.0%      6.60     174.0ms
+     10    1.1556   50.0%      2.32     172.4ms
+     15    1.0185   50.0%      1.45     175.2ms
+     20    0.9213   50.0%      0.92     171.4ms
+     25    0.8208   75.0%      1.26     172.2ms
+     30    0.7162   75.0%      1.20     176.0ms
+     35    0.6124   75.0%      1.30     192.3ms
+     40    0.5156   75.0%      1.35     198.3ms
+
+  >>> Target accuracy 95% reached at step 41.
 ========================================================================
   Summary
 ========================================================================
-  Total time        1.0s
-  Steps run         1
-  Final loss        2.047661
-  Final accuracy    25.0%
-  Best accuracy     25.0%
-  Steps to 90%      not reached
-  Steps to 95%      not reached
+  Total time        7.4s
+  Steps run         41
+  Final loss        0.492618
+  Final accuracy    100.0%
+  Best accuracy     100.0%
+  Steps to 90%      41
+  Steps to 95%      41
 
-  RESULT: FAIL — best accuracy 25.0% < 95% target.
-  Possible issues: bug in architecture, bad LR, optimization setup.
+  RESULT: PASS — model overfits the batch (convergence OK)
 ========================================================================

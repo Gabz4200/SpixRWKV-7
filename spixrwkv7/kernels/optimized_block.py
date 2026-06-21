@@ -15,7 +15,7 @@ import torch.nn.functional as F
 
 from spixrwkv7.layers.drop import DropPath
 from spixrwkv7.layers.graph import HEAD_SIZE, q_shift_graph_multihead
-from spixrwkv7.spixrwkv7 import TIME_MIX_EXTRA_DIM, ChannelMix, RecurrentScan, get_norm_layer
+from spixrwkv7.models.spixrwkv7 import TIME_MIX_EXTRA_DIM, ChannelMix, RecurrentScan, get_norm_layer, block_attn_res
 
 from spixrwkv7.kernels.rwkv7_kernel import rwkv7_recurrent_scan as _cpp_recurrent_scan
 
@@ -420,6 +420,11 @@ class OptimizedVision_RWKV7_Block(nn.Module):
         use_parallel: bool = False,
         norm_layer: str = "layernorm",
         act_layer: str = "relu2",
+        use_attnres: bool = False,
+        attnres_mode: str = "block",
+        attnres_gate_type: str = "bias",
+        attnres_num_blocks: int = 8,
+        attnres_recency_bias_init: float = 10.0,
     ):
         super().__init__()
         self.layer_id = layer_id
@@ -428,6 +433,35 @@ class OptimizedVision_RWKV7_Block(nn.Module):
         self.n_head = n_head
         self.head_size = HEAD_SIZE
         self.with_cls_token = with_cls_token
+
+        # Attention Residuals configuration
+        self.use_attnres = use_attnres
+        self.attnres_mode = attnres_mode
+        self.attnres_gate_type = attnres_gate_type
+        self.attnres_num_blocks = attnres_num_blocks
+        self.attnres_recency_bias_init = attnres_recency_bias_init
+
+        if use_attnres:
+            self.attn_res_proj = nn.Linear(n_embd, 1, bias=False)
+            self.attn_res_norm = get_norm_layer(norm_layer)(n_embd)
+            self.attn_res_bias = nn.Parameter(torch.tensor(attnres_recency_bias_init))
+
+            self.mlp_res_proj = nn.Linear(n_embd, 1, bias=False)
+            self.mlp_res_norm = get_norm_layer(norm_layer)(n_embd)
+            self.mlp_res_bias = nn.Parameter(torch.tensor(attnres_recency_bias_init))
+
+            if attnres_gate_type == "sigmoid_scalar":
+                self.attn_res_gate_logit = nn.Parameter(torch.tensor(-2.0))
+                self.mlp_res_gate_logit = nn.Parameter(torch.tensor(-2.0))
+            elif attnres_gate_type == "sigmoid_vector":
+                self.attn_res_gate_proj = nn.Linear(n_embd, n_embd, bias=True)
+                self.mlp_res_gate_proj = nn.Linear(n_embd, n_embd, bias=True)
+            elif attnres_gate_type == "learnable_alpha":
+                self.attn_res_alpha = nn.Parameter(torch.tensor(0.0))
+                self.mlp_res_alpha = nn.Parameter(torch.tensor(0.0))
+
+            layers_per_block = max(1, (n_layer + attnres_num_blocks - 1) // attnres_num_blocks)
+            self.is_block_boundary = ((layer_id + 1) % layers_per_block == 0) or ((layer_id + 1) == n_layer)
 
         # Shared distance-softening scale for graph Q-shift.
         self.sigma = nn.Parameter(torch.full((), 0.1))
@@ -466,6 +500,21 @@ class OptimizedVision_RWKV7_Block(nn.Module):
 
         self._init_weights()
 
+    def _apply_gate(self, partial_block: torch.Tensor, h_attn: torch.Tensor, sublayer: str) -> torch.Tensor:
+        if self.attnres_gate_type == "sigmoid_scalar":
+            logit = self.attn_res_gate_logit if sublayer == "attn" else self.mlp_res_gate_logit
+            gate = torch.sigmoid(logit)
+            return (1 - gate) * partial_block + gate * h_attn
+        elif self.attnres_gate_type == "sigmoid_vector":
+            gate_proj = self.attn_res_gate_proj if sublayer == "attn" else self.mlp_res_gate_proj
+            gate = torch.sigmoid(gate_proj(partial_block))
+            return (1 - gate) * partial_block + gate * h_attn
+        elif self.attnres_gate_type == "learnable_alpha":
+            alpha = self.attn_res_alpha if sublayer == "attn" else self.mlp_res_alpha
+            return (1 - alpha) * partial_block + alpha * h_attn
+        else:
+            return h_attn
+
     def _init_weights(self):
         with torch.no_grad():
             if self.n_layer <= 1:
@@ -480,6 +529,15 @@ class OptimizedVision_RWKV7_Block(nn.Module):
             self.spatial_mixer.dynamic_offset.init_weights(ratio_1_to_almost0, ddd)
             self.spatial_mixer.scan.init_weights(ratio_0_to_1, ratio_1_to_almost0, ddd)
 
+            if self.use_attnres:
+                nn.init.zeros_(self.attn_res_proj.weight)
+                nn.init.zeros_(self.mlp_res_proj.weight)
+                if self.attnres_gate_type == "sigmoid_vector":
+                    nn.init.zeros_(self.attn_res_gate_proj.weight)
+                    nn.init.constant_(self.attn_res_gate_proj.bias, -2.0)
+                    nn.init.zeros_(self.mlp_res_gate_proj.weight)
+                    nn.init.constant_(self.mlp_res_gate_proj.bias, -2.0)
+
     def forward(
         self,
         x: torch.Tensor,
@@ -488,10 +546,19 @@ class OptimizedVision_RWKV7_Block(nn.Module):
         v_first_fwd: Optional[torch.Tensor] = None,
         v_first_bwd: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
+        attnres_history: Optional[list[torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        if self.layer_id == 0:
-            x = self.ln0(x)
-        xn = self.ln1(x)
+        if self.use_attnres and attnres_history is not None and len(attnres_history) > 0:
+            h_attn = block_attn_res(
+                attnres_history, x,
+                self.attn_res_proj, self.attn_res_norm, self.attn_res_bias
+            )
+            h = self._apply_gate(x, h_attn, "attn")
+            xn = self.ln1(h)
+        else:
+            if self.layer_id == 0:
+                x = self.ln0(x)
+            xn = self.ln1(x)
 
         x, vf_fwd, vf_bwd = self.spatial_mixer(
             x, xn, neighbors, self.sigma, dists,
@@ -499,11 +566,32 @@ class OptimizedVision_RWKV7_Block(nn.Module):
             mask=mask,
         )
 
-        x = self.channel_mix(
-            x, neighbors, dists,
-            sigma=self.sigma, head_dim=self.head_size,
-            with_cls_token=self.with_cls_token,
-        )
+        if self.use_attnres and attnres_history is not None:
+            if self.attnres_mode == "full":
+                attnres_history.append(x)
+
+        if self.use_attnres and attnres_history is not None and len(attnres_history) > 0:
+            h_mlp_attn = block_attn_res(
+                attnres_history, x,
+                self.mlp_res_proj, self.mlp_res_norm, self.mlp_res_bias
+            )
+            h = self._apply_gate(x, h_mlp_attn, "mlp")
+            x = self.channel_mix(
+                x, neighbors, dists,
+                sigma=self.sigma, head_dim=self.head_size,
+                with_cls_token=self.with_cls_token,
+                h=h,
+            )
+        else:
+            x = self.channel_mix(
+                x, neighbors, dists,
+                sigma=self.sigma, head_dim=self.head_size,
+                with_cls_token=self.with_cls_token,
+            )
+
+        if self.use_attnres and attnres_history is not None:
+            if self.attnres_mode == "full" or self.is_block_boundary:
+                attnres_history.append(x)
 
         return x, vf_fwd, vf_bwd
 

@@ -93,6 +93,7 @@ def main() -> None:
         "--target-accuracy", type=float, default=_TARGET_ACCURACY
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--use-attnres", action="store_true", help="Enable Attention Residuals")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -124,6 +125,7 @@ def main() -> None:
         drop_path_rate=_DROP_PATH,
         norm_layer="rmsnorm",
         act_layer="swiglu",
+        use_attnres=args.use_attnres,
     ).to(device)
 
     # Re-init weights for reproducibility
@@ -198,7 +200,14 @@ def main() -> None:
         # Forward
         outs = backbone(x)          # tuple of tensors, one per out_indices
         feat = outs[0]              # (B, embed_dims, h_s, w_s)
-        logits = head(feat)         # (B, num_classes)
+        if getattr(backbone, "use_attnres", False):
+            logits = head(
+                feat,
+                attnres_history=getattr(backbone, "last_attnres_history_patches", None),
+                project_fn=getattr(backbone, "last_project_fn", None)
+            )
+        else:
+            logits = head(feat)         # (B, num_classes)
         loss = F.cross_entropy(logits, y)
 
         # Backward

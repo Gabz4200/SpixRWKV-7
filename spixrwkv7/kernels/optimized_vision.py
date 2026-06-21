@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from typing import Optional, Sequence, Tuple
 
-from spixrwkv7.spixrwkv7 import Vision_RWKV7, Vision_RWKV7_Block, ClassificationHead
+from spixrwkv7.models.spixrwkv7 import Vision_RWKV7, Vision_RWKV7_Block, ClassificationHead
 from spixrwkv7.layers.graph import HEAD_SIZE
 from spixrwkv7.layers.drop import DropPath
 
@@ -49,6 +49,12 @@ class OptimizedVision_RWKV7(Vision_RWKV7):
         use_parallel: bool = False,
         norm_layer: str = "layernorm",
         act_layer: str = "relu2",
+        spixel_backend: str = "diff_slic",
+        use_attnres: bool = False,
+        attnres_mode: str = "block",
+        attnres_gate_type: str = "bias",
+        attnres_num_blocks: int = 8,
+        attnres_recency_bias_init: float = 10.0,
     ):
         super().__init__(
             img_size=img_size,
@@ -72,6 +78,12 @@ class OptimizedVision_RWKV7(Vision_RWKV7):
             norm_layer=norm_layer,
             act_layer=act_layer,
             use_parallel=use_parallel,
+            spixel_backend=spixel_backend,
+            use_attnres=use_attnres,
+            attnres_mode=attnres_mode,
+            attnres_gate_type=attnres_gate_type,
+            attnres_num_blocks=attnres_num_blocks,
+            attnres_recency_bias_init=attnres_recency_bias_init,
         )
 
     def _make_blocks(
@@ -104,6 +116,11 @@ class OptimizedVision_RWKV7(Vision_RWKV7):
                     use_parallel=use_parallel,
                     norm_layer=norm_layer,
                     act_layer=act_layer,
+                    use_attnres=self.use_attnres,
+                    attnres_mode=self.attnres_mode,
+                    attnres_gate_type=self.attnres_gate_type,
+                    attnres_num_blocks=self.attnres_num_blocks,
+                    attnres_recency_bias_init=self.attnres_recency_bias_init,
                 )
                 for i in range(depth)
             ]
@@ -136,6 +153,12 @@ def create_optimized_vision_rwkv7(
     use_parallel: bool = False,
     norm_layer: str = "layernorm",
     act_layer: str = "relu2",
+    spixel_backend: str = "diff_slic",
+    use_attnres: bool = False,
+    attnres_mode: str = "block",
+    attnres_gate_type: str = "bias",
+    attnres_num_blocks: int = 8,
+    attnres_recency_bias_init: float = 10.0,
 ) -> OptimizedVision_RWKV7:
     """Create optimized Vision_RWKV7 with 6-channel input."""
     return OptimizedVision_RWKV7(
@@ -160,4 +183,10 @@ def create_optimized_vision_rwkv7(
         use_parallel=use_parallel,
         norm_layer=norm_layer,
         act_layer=act_layer,
+        spixel_backend=spixel_backend,
+        use_attnres=use_attnres,
+        attnres_mode=attnres_mode,
+        attnres_gate_type=attnres_gate_type,
+        attnres_num_blocks=attnres_num_blocks,
+        attnres_recency_bias_init=attnres_recency_bias_init,
     )

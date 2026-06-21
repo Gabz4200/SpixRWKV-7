@@ -110,7 +110,8 @@ The `ClassificationHead` is a separate module (GAP → LayerNorm → Linear), ke
 Visual_RWKV7_Pytorch/
   spixrwkv7/           -- Core package (package name: spixrwkv7)
     __init__.py        -- Public API exports
-    spixrwkv7.py       -- All modules: Vision_RWKV7, Vision_RWKV7_Block,
+    models/
+      spixrwkv7.py     -- All modules: Vision_RWKV7, Vision_RWKV7_Block,
                             SuperpixelTokenizer, SuperpixelEmbedding,
                             SpatialMixer, RecurrentScan, ChannelMix,
                             ClassificationHead, _DynamicOffset, _TimeMixParams,
@@ -173,7 +174,7 @@ Visual_RWKV7_Pytorch/
 
 Key files:
 
-- **`spixrwkv7/spixrwkv7.py`** — The primary architecture file. Contains all core modules organized in a clear reading order: utility classes → `RecurrentScan` → `SpatialMixer` → `ChannelMix` → `Vision_RWKV7_Block` → `SuperpixelEmbedding` → `SuperpixelTokenizer` → `Vision_RWKV7` → `ClassificationHead` → builder.
+- **`spixrwkv7/models/spixrwkv7.py`** — The primary architecture file. Contains all core modules organized in a clear reading order: utility classes → `RecurrentScan` → `SpatialMixer` → `ChannelMix` → `Vision_RWKV7_Block` → `SuperpixelEmbedding` → `SuperpixelTokenizer` → `Vision_RWKV7` → `ClassificationHead` → builder.
 - **`spixrwkv7/data/diff_slic.py`** — Handles the irregular tokenization logic.
 - **`spixrwkv7/layers/graph.py`** — KNN graph construction and Graph Q-Shift.
 - **`tasks/`** — Training convergence tests and task-specific training scripts. `tasks/classification/humordb/train.py`/`infer.py` demonstrate the full pipeline: HuggingFace dataset loading, disk caching of preprocessed 6-channel tensors, regression head, checkpointing, and metrics. Not part of the core inference package.
@@ -206,14 +207,14 @@ Key files:
 - **No global state**: The model should be fully re-entrant. Avoid module-level mutable state.
 - **Backwards compatibility**: Do not rename or remove public class names (`Vision_RWKV7`, `Vision_RWKV7_Block`, `ClassificationHead`, `SuperpixelEmbedding`, `create_vision_rwkv7`, `q_shift_graph_multihead`). Add new parameters as optional with sensible defaults.
 - **Modularity**: Keep components independent — `ClassificationHead` is separate from `Vision_RWKV7`, `RecurrentScan` handles one direction, etc. Do not merge them.
-- **Dual-implementation sync**: The PyTorch implementation (`spixrwkv7/spixrwkv7.py`) and the optimized C++ implementation (`spixrwkv7/kernels/optimized_block.py`, `spixrwkv7/kernels/optimized_vision.py`) must be kept in SYNC. Any architectural change to the core model must be reflected in the optimized versions. This is a main priority — if they are not synced at any moment, they MUST be synced.
+- **Dual-implementation sync**: The PyTorch implementation (`spixrwkv7/models/spixrwkv7.py`) and the optimized C++ implementation (`spixrwkv7/kernels/optimized_block.py`, `spixrwkv7/kernels/optimized_vision.py`) must be kept in SYNC. Any architectural change to the core model must be reflected in the optimized versions. This is a main priority — if they are not synced at any moment, they MUST be synced.
 
 ## Testing & QA
 
 Tests are located in the `tests/` directory and use `pytest`.
 
 ```bash
-# Run the full test suite (96 tests)
+# Run the full test suite (103 tests)
 uv run pytest
 
 # Run a specific test file
@@ -225,8 +226,8 @@ uv run pytest -v -W all
 
 The test suite covers:
 
-- **Model Architecture** (test_model.py) — forward pass finiteness, determinism, multi-scale output, CLS token, gradient flow, superpixel embedding modes, graph Q-shift logic, non-square inputs, dynamic resolution via `spixel_size`.
-- **RWKV-7-specific features** — decoupled keys (`.k_k`, `.k_a`), vector-valued decay (`.w0`) and ICLR (`.a0`), bonus term (`.r_k`), state update formula, v_first propagation, input-dependent mixing.
+- **Model Architecture** (test_model.py) — forward pass finiteness, determinism, multi-scale output, CLS token, gradient flow, superpixel embedding modes, graph Q-shift logic, non-square inputs, dynamic resolution via `spixel_size`, alternative superpixel backends ("grid", "slic", "slico", "lnsnet"), Attention Residuals (AttnRes) modes and gates.
+- **RWKV-7-specific features** — decoupled keys (`.r_k`, `.k_k`), vector-valued decay (`.w0`) and ICLR (`.a0`), state update formula, v_first propagation, input-dependent mixing.
 - **Color Space Correctness** (test_colors.py) — OkLAB/sRGB conversions, gamut clipping stability, finite gradients.
 - **diffSLIC Stability** (test_diff_slic.py) — no NaNs on black/uniform images, gradient flow, soft/hard modes.
 - **Data Loading** (test_transforms.py) — dataset mean/std calculation, batch consistency, OkLAB preprocessing.
@@ -240,6 +241,9 @@ Beyond pytest, the `tasks/diagnostics/` directory contains training convergence 
 # Step 1: Single-batch overfit (fast — ~30s on CPU)
 uv run python tasks/diagnostics/fast_test_training.py
 
+# Run with Attention Residuals enabled
+uv run python tasks/diagnostics/fast_test_training.py --use-attnres
+```
 # Step 2: Systematic diagnostics
 uv run python tasks/diagnostics/diagnose_training.py --all
 ```
@@ -313,9 +317,9 @@ Detailed AI-specific rules, prohibited actions, and mandatory checks are in [`.a
 Before closing a PR or marking a change as complete:
 
 - [ ] All modified files are free of debug prints, TODO comments, and commented-out code.
-- [ ] If the PR touches `spixrwkv7/spixrwkv7.py`, verify `spixrwkv7/kernels/optimized_block.py` and `spixrwkv7/kernels/optimized_vision.py` are updated to maintain dual-implementation sync.
+- [ ] If the PR touches `spixrwkv7/models/spixrwkv7.py`, verify `spixrwkv7/kernels/optimized_block.py` and `spixrwkv7/kernels/optimized_vision.py` are updated to maintain dual-implementation sync.
 - [ ] If C++ kernel changes were made, rebuild and verify `uv run python scripts/demo.py` still produces finite outputs with `--use-cpp` flag (or verify fallback works).
-- [ ] The test suite passes cleanly (96+ tests).
+- [ ] The test suite passes cleanly (103 tests).
 - [ ] Any new parameters or public APIs are reflected in the relevant docstrings.
 - [ ] No stale branches, merge artifacts, or temporary files remain.
 - [ ] If the change affects inference behavior, update `scripts/demo.py` or add a new demo path.

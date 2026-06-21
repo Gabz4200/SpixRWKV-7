@@ -1,7 +1,7 @@
 from typing import TypedDict, Optional, Sequence, NotRequired
 import torch
 import torch.nn.functional as F
-from spixrwkv7.spixrwkv7 import (
+from spixrwkv7.models.spixrwkv7 import (
     SuperpixelEmbedding,
     Vision_RWKV7,
     Vision_RWKV7_Block,
@@ -607,7 +607,7 @@ def test_forward_num_superpixels_override():
 def test_parallel_recurrent_scan_equivalence():
     """Verify that ParallelRecurrentScan output matches RecurrentScan and OptimizedRecurrentScan."""
     from spixrwkv7.kernels.optimized_block import ParallelRecurrentScan, OptimizedRecurrentScan
-    from spixrwkv7.spixrwkv7 import RecurrentScan
+    from spixrwkv7.models.spixrwkv7 import RecurrentScan
 
     B, N, D = 2, 8, 128
     Hd = 2
@@ -643,7 +643,7 @@ def test_parallel_recurrent_scan_equivalence():
     assert torch.allclose(out_parallel, out_opt, rtol=1e-3, atol=1e-4)
 def test_rmsnorm_swiglu_and_activation_options():
     """Verify that backbone can be initialized and run with RMSNorm and SwiGLU / other activations."""
-    from spixrwkv7.spixrwkv7 import create_vision_rwkv7
+    from spixrwkv7.models.spixrwkv7 import create_vision_rwkv7
     from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7
 
     device = "cpu"
@@ -673,7 +673,7 @@ def test_rmsnorm_swiglu_and_activation_options():
 
 def test_sequence_masking_in_scans():
     """Verify that sequence masking works in the recurrent scan operations."""
-    from spixrwkv7.spixrwkv7 import RecurrentScan
+    from spixrwkv7.models.spixrwkv7 import RecurrentScan
     from spixrwkv7.kernels.optimized_block import ParallelRecurrentScan, OptimizedRecurrentScan
 
     B, N, D = 2, 8, 128
@@ -714,7 +714,7 @@ def test_sequence_masking_in_scans():
 
 def test_sequence_masking_backbone():
     """Verify that mask propagates correctly through the full backbone."""
-    from spixrwkv7.spixrwkv7 import create_vision_rwkv7
+    from spixrwkv7.models.spixrwkv7 import create_vision_rwkv7
 
     device = "cpu"
     B, C, H, W = 2, 6, 64, 64
@@ -733,4 +733,131 @@ def test_sequence_masking_backbone():
     assert len(outs) == 1
     assert outs[0].shape == (B, 128, H, W)
     assert torch.isfinite(outs[0]).all()
+
+
+def test_alternative_superpixel_backends():
+    """Verify that alternative superpixel backends work correctly."""
+    from spixrwkv7 import create_vision_rwkv7, create_optimized_vision_rwkv7
+
+    device = "cpu"
+    B, C, H, W = 2, 6, 32, 32
+    x = torch.randn(B, C, H, W, device=device)
+
+    backends = ["grid", "slic", "slico", "lnsnet"]
+    modes = ["soft", "hard"]
+
+    for backend in backends:
+        for mode in modes:
+            # Test PyTorch creator
+            model = create_vision_rwkv7(
+                img_size=32,
+                embed_dims=64,
+                depth=1,
+                num_heads=1,
+                num_superpixels=9,
+                scatter_output=True,
+                spixel_backend=backend,
+            ).to(device)
+            model.tokenizer.mode = mode
+            model.patch_embed.mode = mode
+
+            outs = model(x)
+            assert len(outs) == 1
+            assert outs[0].shape == (B, 64, H, W)
+            assert torch.isfinite(outs[0]).all()
+
+            # Test Optimized creator
+            opt_model = create_optimized_vision_rwkv7(
+                img_size=32,
+                embed_dims=64,
+                depth=1,
+                num_heads=1,
+                num_superpixels=9,
+                scatter_output=True,
+                spixel_backend=backend,
+                use_cpp=False,  # Fallback to PyTorch since optimized blocks aren't needed here
+            ).to(device)
+            opt_model.tokenizer.mode = mode
+            opt_model.patch_embed.mode = mode
+
+            opt_outs = opt_model(x)
+            assert len(opt_outs) == 1
+            assert opt_outs[0].shape == (B, 64, H, W)
+            assert torch.isfinite(opt_outs[0]).all()
+
+
+def test_attention_residuals():
+    """Verify that Attention Residuals (AttnRes) works correctly for all modes and gates."""
+    from spixrwkv7 import create_vision_rwkv7, create_optimized_vision_rwkv7, ClassificationHead
+
+    device = "cpu"
+    B, C, H, W = 2, 6, 32, 32
+    x = torch.randn(B, C, H, W, device=device)
+
+    modes = ["block", "full"]
+    gates = ["bias", "sigmoid_scalar", "sigmoid_vector", "learnable_alpha"]
+
+    for mode in modes:
+        for gate in gates:
+            # Test standard model creator with AttnRes
+            model = create_vision_rwkv7(
+                img_size=32,
+                embed_dims=64,
+                depth=2,
+                num_heads=1,
+                num_superpixels=9,
+                scatter_output=True,
+                use_attnres=True,
+                attnres_mode=mode,
+                attnres_gate_type=gate,
+            ).to(device)
+
+            outs = model(x)
+            assert len(outs) == 1
+            assert outs[0].shape == (B, 64, H, W)
+            assert torch.isfinite(outs[0]).all()
+
+            # Check that last_attnres_history and last_project_fn are correctly set
+            assert model.last_attnres_history is not None
+            assert model.last_attnres_history_patches is not None
+            assert model.last_project_fn is not None
+
+            # Test classification head with AttnRes history
+            head = ClassificationHead(embed_dims=64, num_classes=10).to(device)
+            logits = head(
+                outs[0],
+                attnres_history=model.last_attnres_history_patches,
+                project_fn=model.last_project_fn
+            )
+            assert logits.shape == (B, 10)
+            assert torch.isfinite(logits).all()
+
+            # Test optimized creator with AttnRes
+            opt_model = create_optimized_vision_rwkv7(
+                img_size=32,
+                embed_dims=64,
+                depth=2,
+                num_heads=1,
+                num_superpixels=9,
+                scatter_output=True,
+                use_attnres=True,
+                attnres_mode=mode,
+                attnres_gate_type=gate,
+                use_cpp=False,
+            ).to(device)
+
+            opt_outs = opt_model(x)
+            assert len(opt_outs) == 1
+            assert opt_outs[0].shape == (B, 64, H, W)
+            assert torch.isfinite(opt_outs[0]).all()
+
+            opt_logits = head(
+                opt_outs[0],
+                attnres_history=opt_model.last_attnres_history_patches,
+                project_fn=opt_model.last_project_fn
+            )
+            assert opt_logits.shape == (B, 10)
+            assert torch.isfinite(opt_logits).all()
+
+
 

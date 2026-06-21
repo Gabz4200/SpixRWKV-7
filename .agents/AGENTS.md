@@ -23,7 +23,7 @@ This file is for AI coding agents. It supplements `CONTRIBUTING.md` with rules s
 
 **CRITICAL**: This codebase maintains TWO implementations of the core architecture:
 
-1. **PyTorch implementation** (`spixrwkv7/spixrwkv7.py`): `Vision_RWKV7`, `Vision_RWKV7_Block`, `RecurrentScan`, `SpatialMixer`, `ChannelMix`
+1. **PyTorch implementation** (`spixrwkv7/models/spixrwkv7.py`): `Vision_RWKV7`, `Vision_RWKV7_Block`, `RecurrentScan`, `SpatialMixer`, `ChannelMix`
 2. **Optimized C++ implementation** (`spixrwkv7/kernels/optimized_block.py`, `spixrwkv7/kernels/optimized_vision.py`): `OptimizedVision_RWKV7_Block`, `OptimizedVision_RWKV7`, `OptimizedRecurrentScan`
 
 **MAIN PRIORITY**: Any change to the PyTorch implementation MUST be mirrored in the optimized implementation. If they are not synced at any moment, they MUST be synced. This includes:
@@ -37,7 +37,7 @@ The optimized versions inherit from or compose the PyTorch implementations and d
 ## Key Architecture Facts for Agents
 
 - **Modular package**: The model is organized under the `spixrwkv7/` package.
-- **Core components** (`spixrwkv7/spixrwkv7.py`):
+- **Core components** (`spixrwkv7/models/spixrwkv7.py`):
     - `Vision_RWKV7`: Full backbone composing tokenizer, blocks, and output projection.
     - `Vision_RWKV7_Block`: Block composing `SpatialMixer` + `ChannelMix` with residual connections.
     - `SuperpixelTokenizer`: End-to-end vision-to-token pipeline (diffSLIC → embedding → graph → Hilbert reorder).
@@ -95,8 +95,8 @@ The optimized versions inherit from or compose the PyTorch implementations and d
 ## Coordination Before Coding
 
 - Check for existing open issues and PRs that may overlap with the planned change.
-- If the change modifies `spixrwkv7.py` architecture (adds/removes parameters, changes recurrence logic), verify alignment with the RWKV-7 paper and VRWKV6 patterns. The codebase is a port — do not introduce alternative formulations without discussion.
-- When in doubt about design intent, read the docstring at the top of `spixrwkv7.py` (lines 1-6) and the block forward docstring.
+- If the change modifies `spixrwkv7/models/spixrwkv7.py` architecture (adds/removes parameters, changes recurrence logic), verify alignment with the RWKV-7 paper and VRWKV6 patterns. The codebase is a port — do not introduce alternative formulations without discussion.
+- When in doubt about design intent, read the docstring at the top of `spixrwkv7/models/spixrwkv7.py` (lines 1-6) and the block forward docstring.
 
 ## Fail-Closed Behavior
 
@@ -107,9 +107,9 @@ The optimized versions inherit from or compose the PyTorch implementations and d
 ## Prohibited Actions
 
 - Do NOT add new dependencies to `pyproject.toml` unless the change absolutely requires them and no alternative exists.
-- Do NOT modify `spixrwkv7/spixrwkv7.py` without also updating `spixrwkv7/kernels/optimized_block.py` and `spixrwkv7/kernels/optimized_vision.py` to maintain dual-implementation sync. The C++ kernel delegation must match the PyTorch logic exactly.
+- Do NOT modify `spixrwkv7/models/spixrwkv7.py` without also updating `spixrwkv7/kernels/optimized_block.py` and `spixrwkv7/kernels/optimized_vision.py` to maintain dual-implementation sync. The C++ kernel delegation must match the PyTorch logic exactly.
 - Do NOT add training code (optimizers, schedulers, data loaders) to the `spixrwkv7/` core package. This is an inference codebase.
-- Do NOT reformat `spixrwkv7.py` with an auto-formatter that changes the parameter group layout. The block's `__init__` is organized in a specific reading order (RWKV-7 head params, delta rule params, vision additions). Preserve it.
+- Do NOT reformat `spixrwkv7/models/spixrwkv7.py` with an auto-formatter that changes the parameter group layout. The block's `__init__` is organized in a specific reading order (RWKV-7 head params, delta rule params, vision additions). Preserve it.
 - Do NOT remove the `__slots__` declarations on `Permute` and `DropPath`.
 - Do NOT add `# type: ignore` or `# noqa` to silence genuine type errors. Fix the types.
 - Do NOT bake a classification head into the `Vision_RWKV7` backbone. The `ClassificationHead` is a separate module — keep it that way so the backbone remains usable for dense prediction tasks.
@@ -117,8 +117,8 @@ The optimized versions inherit from or compose the PyTorch implementations and d
 
 ## Mandatory Checks Before PR
 
-- [ ] `uv run pytest` passes all 96+ tests.
-- [ ] If the PR touches `spixrwkv7/spixrwkv7.py`, verify `spixrwkv7/kernels/optimized_block.py` and `spixrwkv7/kernels/optimized_vision.py` are updated to maintain dual-implementation sync.
+- [ ] `uv run pytest` passes all 103 tests.
+- [ ] If the PR touches `spixrwkv7/models/spixrwkv7.py`, verify `spixrwkv7/kernels/optimized_block.py` and `spixrwkv7/kernels/optimized_vision.py` are updated to maintain dual-implementation sync.
 - [ ] If C++ kernel changes were made, rebuild and verify `uv run python scripts/demo.py` still produces finite outputs with `--use-cpp` flag (or verify fallback works).
 - [ ] `uv run python scripts/demo.py` runs without errors and prints `All outputs finite: True`.
 - [ ] No `print()` debug statements, `import pdb`, or `breakpoint()` calls remain.
