@@ -45,6 +45,7 @@ def q_shift_graph_multihead(
     neighbors: torch.Tensor,
     head_dim: int = HEAD_SIZE,
     with_cls_token: bool = False,
+    num_extra_tokens: int = 0,
     **kwargs,
 ) -> torch.Tensor:
     """Graph-based Q-Shift for superpixel or irregular grids.
@@ -64,11 +65,14 @@ def q_shift_graph_multihead(
     assert head_dim % K == 0, f"head_dim={head_dim} must be divisible by K={K}"
     group_size = head_dim // K
 
-    cls_tokens = None
-    if with_cls_token:
-        cls_tokens = input[:, [-1], :]
-        input = input[:, :-1, :]
-        N = N_total - 1
+    if num_extra_tokens == 0 and with_cls_token:
+        num_extra_tokens = 1
+
+    extra_tokens = None
+    if num_extra_tokens > 0:
+        extra_tokens = input[:, -num_extra_tokens:, :]
+        input = input[:, :-num_extra_tokens, :]
+        N = N_total - num_extra_tokens
     else:
         N = N_total
 
@@ -90,7 +94,7 @@ def q_shift_graph_multihead(
     output = output * valid_mask
 
     output = output.view(B, N, C)
-    if with_cls_token:
-        assert cls_tokens is not None
-        output = torch.cat((output, cls_tokens), dim=1)
+    if num_extra_tokens > 0:
+        assert extra_tokens is not None
+        output = torch.cat((output, extra_tokens), dim=1)
     return output

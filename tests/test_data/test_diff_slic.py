@@ -426,6 +426,12 @@ def test_diffslic_non_square_image():
     )
 
 
+def test_diffslic_cpp_backend_active():
+    """Verify that the C++ backend is actually loaded and not silently falling back."""
+    slic = DiffSLIC(n_spixels=100, use_cpp=True)
+    assert slic._has_cpp is True
+
+
 if __name__ == "__main__":
     print("STARTING COMPLETE DIFFSLIC TESTS")
     print("=" * 80)

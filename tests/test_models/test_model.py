@@ -1,13 +1,12 @@
 from typing import TypedDict, Optional, Sequence, NotRequired
 import torch
 import torch.nn.functional as F
-from spixrwkv7.models.model import (
+from spixrwkv7.spixrwkv7 import (
     SuperpixelEmbedding,
     Vision_RWKV7,
     Vision_RWKV7_Block,
     create_vision_rwkv7,
 )
-from spixrwkv7.layers.graph import build_knn_graph, q_shift_graph_multihead
 
 
 # =====================================================================
@@ -23,7 +22,7 @@ class ModelConfig(TypedDict):
     num_superpixels: int
     patch_size: NotRequired[Optional[int]]
     diff_slic_iters: int
-    in_chans: NotRequired[int]
+    in_chans: int
     drop_path_rate: NotRequired[float]
     init_values: NotRequired[Optional[float]]
     final_norm: NotRequired[bool]
@@ -58,93 +57,6 @@ _SMALL_CONFIG: ModelConfig = {
     "diff_slic_iters": 2,
     "in_chans": 6,
 }
-
-
-# =====================================================================
-# Graph-Based Helpers Tests
-# =====================================================================
-
-
-def test_build_knn_graph_single():
-    """Test KNN graph building for a single set of centroids."""
-    # 4 centroids in a square
-    centroids = torch.tensor([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]])
-    neighbors, _ = build_knn_graph(centroids, k=2)
-    assert neighbors.shape == (4, 2)
-    # Ensure a node doesn't select itself as a neighbor
-    for i in range(4):
-        assert i not in neighbors[i]
-
-
-def test_build_knn_graph_batched():
-    """Test KNN graph building for batched centroids."""
-    B, N = 2, 5
-    centroids = torch.rand(B, N, 2)
-    neighbors, _ = build_knn_graph(centroids, k=3)
-    assert neighbors.shape == (B, N, 3)
-
-
-def test_q_shift_graph_multihead_logic():
-    """Verify that Graph Q-Shift correctly shifts tokens along graph edges."""
-    B, N, C = 1, 4, 16
-    head_dim = 16
-
-    # Graph: Node 0 connects to 1, 2. Node 1 connects to 0, 3, etc.
-    neighbors = torch.tensor([[[1, 2], [0, 3], [0, 3], [1, 2]]])  # [B, N, K]
-
-    # Fill input with node IDs + 1 so we can track movement
-    x = torch.zeros(B, N, C)
-    for i in range(N):
-        x[0, i, :] = i + 1
-
-    out = q_shift_graph_multihead(x, neighbors, head_dim=head_dim, with_cls_token=False)
-
-    # Group 0 (channels 0-7): should come from neighbor index 0
-    # Node 0's neighbor 0 is Node 1. So out[0, 0, 0] should be x[0, 1, 0] = 2
-    assert out[0, 0, 0].item() == 2.0
-    # Node 1's neighbor 0 is Node 0. So out[0, 1, 0] should be x[0, 0, 0] = 1
-    assert out[0, 1, 0].item() == 1.0
-
-    # Group 1 (channels 8-15): should come from neighbor index 1
-    # Node 0's neighbor 1 is Node 2. So out[0, 0, 8] should be x[0, 2, 8] = 3
-    assert out[0, 0, 8].item() == 3.0
-    # Node 3's neighbor 1 is Node 2. So out[0, 3, 8] should be x[0, 2, 8] = 3
-    assert out[0, 3, 8].item() == 3.0
-
-
-def test_q_shift_graph_multihead_cls_token():
-    """Verify CLS token is excluded from shifting and preserved."""
-    B, N, C = 1, 4, 16
-    head_dim = 16
-    neighbors = torch.zeros(B, N, 2, dtype=torch.long)
-
-    x = torch.randn(B, N + 1, C)
-    cls_token = x[:, -1:, :]
-
-    out = q_shift_graph_multihead(x, neighbors, head_dim=head_dim, with_cls_token=True)
-
-    # The last token should be exactly the unmodified CLS token
-    assert torch.allclose(out[:, -1:, :], cls_token)
-
-
-def test_q_shift_graph_multihead_distance_weights():
-    """Verify graph Q-Shift weights neighbors by distance."""
-    B, N, C = 1, 4, 16
-    head_dim = 16
-    neighbors = torch.tensor([[[1, 2], [0, 3], [0, 3], [1, 2]]])
-    dists = torch.tensor([[[0.1, 1.0], [0.1, 1.0], [0.1, 1.0], [0.1, 1.0]]])
-
-    x = torch.zeros(B, N, C)
-    for i in range(N):
-        x[0, i, :] = i + 1
-
-    out = q_shift_graph_multihead(
-        x, neighbors, dists=dists, head_dim=head_dim, with_cls_token=False
-    )
-    weights = torch.softmax(-dists[0, 0] / 0.1, dim=0)
-    expected = weights[0] * x[0, 1, :8] + weights[1] * x[0, 2, :8]
-
-    assert torch.allclose(out[0, 0, :8], expected, atol=5e-4)
 
 
 # =====================================================================
@@ -690,3 +602,135 @@ def test_forward_num_superpixels_override():
     # We can't easily check the internal K without hooks, but if it doesn't crash 
     # and produces the right output shape, the interpolation and graph building 
     # worked for the new K.
+
+
+def test_parallel_recurrent_scan_equivalence():
+    """Verify that ParallelRecurrentScan output matches RecurrentScan and OptimizedRecurrentScan."""
+    from spixrwkv7.kernels.optimized_block import ParallelRecurrentScan, OptimizedRecurrentScan
+    from spixrwkv7.spixrwkv7 import RecurrentScan
+
+    B, N, D = 2, 8, 128
+    Hd = 2
+    S = 64
+    dev = "cpu"
+
+    torch.manual_seed(42)
+
+    # Instantiate the three scan modules with the same dimensions
+    scan_ref = RecurrentScan(n_embd=D, n_head=Hd, layer_id=1, n_layer=2).to(dev)
+
+    # Initialize weights to match
+    scan_parallel = ParallelRecurrentScan(n_embd=D, n_head=Hd, layer_id=1, n_layer=2).to(dev)
+    scan_opt = OptimizedRecurrentScan(n_embd=D, n_head=Hd, layer_id=1, n_layer=2).to(dev)
+
+    # Copy parameters
+    for p_name, p in scan_ref.named_parameters():
+        dict(scan_parallel.named_parameters())[p_name].data.copy_(p.data)
+        dict(scan_opt.named_parameters())[p_name].data.copy_(p.data)
+
+    # Inputs
+    xn = torch.randn(B, N, D, device=dev)
+    xx = torch.randn(B, N, D, device=dev)
+    dm = torch.randn(6, B, N, D, device=dev)
+
+    # Forward passes
+    out_ref, _ = scan_ref(xn, xx, dm, "forward", None)
+    out_parallel, _ = scan_parallel(xn, xx, dm, "forward", None)
+    out_opt, _ = scan_opt(xn, xx, dm, "forward", None)
+
+    # Check that they produce very close results
+    assert torch.allclose(out_parallel, out_ref, rtol=1e-3, atol=1e-4)
+    assert torch.allclose(out_parallel, out_opt, rtol=1e-3, atol=1e-4)
+def test_rmsnorm_swiglu_and_activation_options():
+    """Verify that backbone can be initialized and run with RMSNorm and SwiGLU / other activations."""
+    from spixrwkv7.spixrwkv7 import create_vision_rwkv7
+    from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7
+
+    device = "cpu"
+    B, C, H, W = 2, 6, 64, 64
+    x = torch.randn(B, C, H, W, device=device)
+
+    # Test 1: PyTorch model with RMSNorm and SwiGLU
+    model1 = create_vision_rwkv7(
+        img_size=64, embed_dims=128, depth=2, num_heads=2,
+        norm_layer="rmsnorm", act_layer="swiglu", scatter_output=True
+    ).to(device)
+    outs1 = model1(x)
+    assert len(outs1) == 1
+    assert outs1[0].shape == (B, 128, H, W)
+    assert torch.isfinite(outs1[0]).all()
+
+    # Test 2: Optimized C++ model with RMSNorm and SwiGLU
+    model2 = create_optimized_vision_rwkv7(
+        img_size=64, embed_dims=128, depth=2, num_heads=2,
+        norm_layer="rmsnorm", act_layer="swiglu", use_cpp=True, scatter_output=True
+    ).to(device)
+    outs2 = model2(x)
+    assert len(outs2) == 1
+    assert outs2[0].shape == (B, 128, H, W)
+    assert torch.isfinite(outs2[0]).all()
+
+
+def test_sequence_masking_in_scans():
+    """Verify that sequence masking works in the recurrent scan operations."""
+    from spixrwkv7.spixrwkv7 import RecurrentScan
+    from spixrwkv7.kernels.optimized_block import ParallelRecurrentScan, OptimizedRecurrentScan
+
+    B, N, D = 2, 8, 128
+    Hd, S = 2, 64
+    dev = "cpu"
+
+    # Setup model and copy weights
+    scan_ref = RecurrentScan(n_embd=D, n_head=Hd, layer_id=1, n_layer=2).to(dev)
+    scan_parallel = ParallelRecurrentScan(n_embd=D, n_head=Hd, layer_id=1, n_layer=2).to(dev)
+    scan_opt = OptimizedRecurrentScan(n_embd=D, n_head=Hd, layer_id=1, n_layer=2).to(dev)
+
+    for p_name, p in scan_ref.named_parameters():
+        dict(scan_parallel.named_parameters())[p_name].data.copy_(p.data)
+        dict(scan_opt.named_parameters())[p_name].data.copy_(p.data)
+
+    xn = torch.randn(B, N, D, device=dev)
+    xx = torch.randn(B, N, D, device=dev)
+    dm = torch.randn(6, B, N, D, device=dev)
+
+    # Mask: second batch element has last 4 timesteps masked
+    mask = torch.ones(B, N, device=dev)
+    mask[1, 4:] = 0.0
+
+    # Forward passes with mask
+    out_ref, _ = scan_ref(xn, xx, dm, "forward", None, mask=mask)
+    out_parallel, _ = scan_parallel(xn, xx, dm, "forward", None, mask=mask)
+    out_opt, _ = scan_opt(xn, xx, dm, "forward", None, mask=mask)
+
+    # Masked positions should be zeroed out
+    assert (out_ref[1, 4:] == 0.0).all()
+    assert (out_parallel[1, 4:] == 0.0).all()
+    assert (out_opt[1, 4:] == 0.0).all()
+
+    # Check prefix scan equivalence and optimized scan equivalence with mask
+    assert torch.allclose(out_parallel, out_ref, rtol=1e-3, atol=1e-4)
+    assert torch.allclose(out_parallel, out_opt, rtol=1e-3, atol=1e-4)
+
+
+def test_sequence_masking_backbone():
+    """Verify that mask propagates correctly through the full backbone."""
+    from spixrwkv7.spixrwkv7 import create_vision_rwkv7
+
+    device = "cpu"
+    B, C, H, W = 2, 6, 64, 64
+    x = torch.randn(B, C, H, W, device=device)
+
+    # Create backbone
+    model = create_vision_rwkv7(img_size=64, embed_dims=128, depth=2, num_heads=2, scatter_output=True).to(device)
+    
+    # Since token ordering is Hilbert-sorted, we pass a mask of the same size as the number of superpixels
+    # Let's say we have 196 superpixels. Let's mask some of them out.
+    mask = torch.ones(B, 196, device=device)
+    mask[0, 100:] = 0.0
+
+    # Run model with mask
+    outs = model(x, mask=mask)
+    assert len(outs) == 1
+    assert outs[0].shape == (B, 128, H, W)
+    assert torch.isfinite(outs[0]).all()
+

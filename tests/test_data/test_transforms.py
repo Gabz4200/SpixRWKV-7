@@ -275,9 +275,8 @@ def test_preprocess_image_for_rwkv7_full_pipeline(tmp_path):
     L, a, b, alpha, x, y = [tensor[0, i] for i in range(6)]
 
     # 1. Check alpha (channel 3)
-    # 200 / 255.0 ≈ 0.7843
-    # Balanced with 2.0 * alpha - 1.0 -> 2.0 * 0.7843 - 1.0 = 0.5686
-    expected_alpha = 2.0 * (200 / 255.0) - 1.0
+    # 200 / 255.0 ≈ 0.7843 — alpha is passed through raw (not balanced)
+    expected_alpha = 200 / 255.0
     assert torch.allclose(alpha, torch.full_like(alpha, expected_alpha))
 
     # 2. Check spatial coordinates (channels 4, 5)
@@ -329,14 +328,14 @@ def test_revert_balanced_superpixel_features_roundtrip():
 
     # 1. Test the math directly
     L_bal = 2.0 * L - 1.0
-    alpha_bal = 2.0 * alpha - 1.0
     chroma_scale = 2.5
     a_bal = a * chroma_scale
     b_bal = b * chroma_scale
+    # Alpha is not balanced — passed through as-is
     x = torch.zeros(B, 1, H, W)
     y = torch.zeros(B, 1, H, W)
     
-    balanced = torch.cat([L_bal, a_bal, b_bal, alpha_bal, x, y], dim=1)
+    balanced = torch.cat([L_bal, a_bal, b_bal, alpha, x, y], dim=1)
     
     # 2. Revert
     oklab_rev, alpha_rev = revert_balanced_superpixel_features(balanced, chroma_scale=chroma_scale)
@@ -367,18 +366,15 @@ def test_prepare_balanced_superpixel_features_integration():
 
 def test_calculate_dataset_mean_std_rgb_uniform(tmp_path):
     """Verify RGB stats calculation on a uniform gray dataset."""
-    create_dummy_dataset(
-        str(tmp_path), num_classes=2, images_per_class=2, size=(64, 64)
-    )
+    from torch.utils.data import DataLoader, TensorDataset
 
-    # Overwrite with pure uniform gray (128, 128, 128)
-    for root, _, files in os.walk(str(tmp_path)):
-        for f in files:
-            create_dummy_image(os.path.join(root, f), (64, 64), (128, 128, 128))
+    # Create uniform gray images
+    n_images = 4
+    data = torch.full((n_images, 3, 64, 64), 128.0 / 255.0)
+    dataset = TensorDataset(data, torch.zeros(n_images, dtype=torch.long))
+    dataloader = DataLoader(dataset, batch_size=2)
 
-    mean, std = calculate_dataset_mean_std(
-        str(tmp_path), img_size=64, batch_size=2, color_space="rgb"
-    )
+    mean, std = calculate_dataset_mean_std(dataloader, color_space="rgb")
 
     expected_val = 128.0 / 255.0  # ~0.5019
     assert len(mean) == 3
@@ -395,13 +391,15 @@ def test_calculate_dataset_mean_std_rgb_uniform(tmp_path):
 
 def test_calculate_dataset_mean_std_oklab_finite(tmp_path):
     """Verify OkLAB stats calculation produces finite and plausible values."""
-    create_dummy_dataset(
-        str(tmp_path), num_classes=3, images_per_class=4, size=(64, 64)
-    )
+    from torch.utils.data import DataLoader, TensorDataset
 
-    mean, std = calculate_dataset_mean_std(
-        str(tmp_path), img_size=64, batch_size=4, color_space="oklab"
-    )
+    # Create random RGB images
+    n_images = 12
+    data = torch.rand(n_images, 3, 64, 64)
+    dataset = TensorDataset(data, torch.zeros(n_images, dtype=torch.long))
+    dataloader = DataLoader(dataset, batch_size=4)
+
+    mean, std = calculate_dataset_mean_std(dataloader, color_space="oklab")
 
     assert len(mean) == 3
     assert len(std) == 3
@@ -416,18 +414,20 @@ def test_calculate_dataset_mean_std_oklab_finite(tmp_path):
 
 def test_calculate_dataset_mean_std_batch_consistency(tmp_path):
     """Verify that changing batch size doesn't significantly alter the calculated stats."""
-    create_dummy_dataset(
-        str(tmp_path), num_classes=2, images_per_class=5, size=(32, 32)
-    )
+    from torch.utils.data import DataLoader, TensorDataset
 
-    mean_b1, std_b1 = calculate_dataset_mean_std(
-        str(tmp_path), img_size=32, batch_size=1, color_space="rgb"
-    )
-    mean_b4, std_b4 = calculate_dataset_mean_std(
-        str(tmp_path), img_size=32, batch_size=4, color_space="rgb"
-    )
+    # Create constant-value images (std = 0 avoids Bessel correction noise)
+    n_images = 10
+    data = torch.full((n_images, 3, 32, 32), 0.5)
+    dataset = TensorDataset(data, torch.zeros(n_images, dtype=torch.long))
 
-    # Results should be identical regardless of batch size
+    dataloader_b1 = DataLoader(dataset, batch_size=1)
+    dataloader_b4 = DataLoader(dataset, batch_size=4)
+
+    mean_b1, std_b1 = calculate_dataset_mean_std(dataloader_b1, color_space="rgb")
+    mean_b4, std_b4 = calculate_dataset_mean_std(dataloader_b4, color_space="rgb")
+
+    # Results should be nearly identical regardless of batch size
     for m1, m4 in zip(mean_b1, mean_b4):
         assert abs(m1 - m4) < 1e-7
     for s1, s4 in zip(std_b1, std_b4):

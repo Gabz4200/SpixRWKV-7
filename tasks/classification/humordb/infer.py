@@ -8,6 +8,7 @@ Usage:
 
 import argparse
 import math
+import random
 import sys
 import time
 from pathlib import Path
@@ -25,7 +26,7 @@ if __name__ == "__main__":
 from datasets import load_dataset
 from torch.utils.data import DataLoader, IterableDataset
 
-from spixrwkv7 import create_vision_rwkv7
+from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
 
 
@@ -196,6 +197,8 @@ def main() -> None:
 
     device = torch.device("cpu")
     torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
 
     # ------------------------------------------------------------------
     # Load checkpoint metadata first to know embed_dims
@@ -222,7 +225,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Build model
     # ------------------------------------------------------------------
-    backbone = create_vision_rwkv7(
+    backbone = _create_model(
         img_size=img_size,
         embed_dims=embed_dims,
         num_heads=max(2, embed_dims // 64),
@@ -254,7 +257,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     print(f"  Loading {args.split} split...")
     ds = HumorDBTestSet(args.split, img_size)
-    loader = DataLoader(ds, batch_size=args.batch_size, num_workers=0)
+    loader = DataLoader(ds, batch_size=args.batch_size, num_workers=0, pin_memory=True)
 
     # ------------------------------------------------------------------
     # Inference

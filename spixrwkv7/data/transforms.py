@@ -1,13 +1,12 @@
 """Image and feature transforms for SpixRWKV-7: preprocessing, color conversion, loading."""
 
-from typing import Optional, Tuple, cast
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from PIL import Image
 
-from spixrwkv7.data.colors import from_srgb_to_linear_rgb, from_linear_rgb_to_oklab
+from spixrwkv7.data.colors import from_linear_rgb_to_oklab, from_srgb_to_linear_rgb
 
 # ==============================================================================
 # Default Normalization Constants
@@ -42,9 +41,14 @@ def calculate_dataset_mean_std(
     color_space: str = "rgb",
     device: Optional[torch.device] = None,
 ) -> tuple[list[float], list[float]]:
-    """Calculate per-channel mean and std over an entire dataset."""
-    total_mean = None
-    total_std = None
+    """Calculate per-channel mean and std over an entire dataset.
+
+    Uses variance-pooling formula: std = sqrt(E[x^2] - E[x]^2)
+    across all batches, avoiding Bessel correction bias from per-batch
+    weighted averaging.
+    """
+    total_sum: Optional[torch.Tensor] = None
+    total_sqsum: Optional[torch.Tensor] = None
     total_count = 0
 
     for batch in dataloader:
@@ -61,24 +65,30 @@ def calculate_dataset_mean_std(
         # Flatten spatial dims: (B, C, H*W)
         flat = images.view(B, C, -1)
 
-        batch_mean = flat.mean(dim=(0, 2))
-        batch_std = flat.std(dim=(0, 2))
+        # Accumulate sum and sum-of-squares for correct variance pooling
+        batch_sum = flat.sum(dim=(0, 2))  # (C,)
+        batch_sqsum = (flat ** 2).sum(dim=(0, 2))  # (C,)
 
-        if total_mean is None:
-            total_mean = batch_mean * B
-            total_std = batch_std * B
+        if total_sum is None:
+            total_sum = batch_sum
+            total_sqsum = batch_sqsum
         else:
-            total_mean += batch_mean * B
-            total_std += batch_std * B
-        total_count += B
+            assert total_sum is not None
+            total_sum += batch_sum
+            total_sqsum += batch_sqsum
+        total_count += B * H * W  # total elements per channel
 
-    total_mean = total_mean / total_count
-    total_std = total_std / total_count
+    # total_sum/total_sqsum are guaranteed assigned by this point (loop ran at least once)
+    assert total_sum is not None and total_sqsum is not None, "dataloader must yield at least one batch"
+    total_mean = total_sum / total_count
+    total_var = total_sqsum / total_count - total_mean ** 2
+    total_std = total_var.clamp(min=0.0).sqrt()
     return total_mean.tolist(), total_std.tolist()
 
 
 def load_image_to_tensor(
     image_path: str,
+    img_size: int = -1,
     target_size: Optional[Tuple[int, int]] = None,
     color_space: str = "rgb",
     normalize: bool = False,
@@ -86,7 +96,18 @@ def load_image_to_tensor(
     std: Optional[list[float]] = None,
     include_alpha: bool = False,
 ) -> torch.Tensor:
-    """Load an image from disk, convert to tensor, optionally resize, normalize, and convert color space."""
+    """Load an image from disk, convert to tensor, resize, normalize, and convert color space.
+    
+    Args:
+        image_path: Path to image file.
+        img_size: Target height (-1 for original size, otherwise scales proportionally).
+        target_size: Legacy tuple (H, W) - overrides img_size if provided.
+        color_space: 'rgb' or 'oklab'.
+        normalize: Apply mean/std normalization.
+        mean: Channel means (defaults IMAGENET_RGB_MEAN).
+        std: Channel stds (defaults IMAGENET_RGB_STD).
+        include_alpha: Include alpha channel from RGBA images.
+    """
     if include_alpha:
         pil_image = Image.open(image_path).convert("RGBA")
     else:
@@ -94,6 +115,12 @@ def load_image_to_tensor(
 
     if target_size is not None:
         pil_image = pil_image.resize(target_size, Image.Resampling.BILINEAR)
+    elif img_size > 0:
+        orig_w, orig_h = pil_image.size  # PIL uses (width, height)
+        aspect = orig_w / orig_h
+        new_h = img_size
+        new_w = int(round(new_h * aspect))
+        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
 
     if include_alpha:
         arr = np.array(pil_image, dtype=np.float32).transpose(2, 0, 1) / 255.0
@@ -113,6 +140,8 @@ def load_image_to_tensor(
 
     if color_space.lower() == "oklab":
         tensor = _convert_srgb_to_oklab(tensor)
+    elif color_space.lower() != "rgb":
+        raise ValueError(f"Unsupported color_space: '{color_space}'. Supported: 'rgb', 'oklab'.")
 
     return tensor
 
@@ -146,16 +175,32 @@ def smart_resize(
 
 def preprocess_image_for_rwkv7(
     image_path: str,
+    img_size: int = -1,
     target_size: Tuple[int, int] = (64, 64),
     include_alpha: bool = True,
 ) -> torch.Tensor:
-    """Full preprocessing pipeline returning (1, 6, H, W) tensor: OkLAB + alpha + xy."""
+    """Full preprocessing pipeline returning (1, 6, H, W) tensor: OkLAB + alpha + xy.
+    
+    Args:
+        image_path: Path to image file.
+        img_size: Target height (-1 for original size, otherwise scales proportionally).
+        target_size: Legacy tuple (H, W) - overrides img_size if provided.
+        include_alpha: Include alpha channel from RGBA images.
+    """
     tensor = load_image_to_tensor(
         image_path,
+        img_size=img_size,
         target_size=target_size,
         color_space="oklab",
         include_alpha=include_alpha,
     )
+    # Always return 6 channels: OkLAB (3) + alpha (1) + xy (2)
+    if not include_alpha:
+        # Inject zero alpha channel when not provided (opaque)
+        device = tensor.device
+        _, _, H, W = tensor.shape
+        alpha_channel = torch.ones(1, 1, H, W, device=device)
+        tensor = torch.cat([tensor, alpha_channel], dim=1)
     tensor = add_spatial_coordinates(tensor, center_origin=True)
     return tensor  # (1, 6, H, W)
 

@@ -1,0 +1,299 @@
+{
+  "version": 1,
+  "skills": {
+    "add-uint-support": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/add-uint-support/SKILL.md",
+      "computedHash": "db3c4f35335254b7b1073efb3b0c19871327f284f673107d1365c4f4ae9c2479"
+    },
+    "aoti-debug": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/aoti-debug/SKILL.md",
+      "computedHash": "c40ddf44bc389044627a1cd6b16aa77b66a1f15f3faa4375ca787095fc889de4"
+    },
+    "at-dispatch-v2": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/at-dispatch-v2/SKILL.md",
+      "computedHash": "be5d83ac0529077e1be2d9a904b702a5438d5d79e097101e6663c99a2deb043a"
+    },
+    "cpp-coding-standards": {
+      "source": "affaan-m/everything-claude-code",
+      "sourceType": "github",
+      "skillPath": "skills/cpp-coding-standards/SKILL.md",
+      "computedHash": "e8c59d13fe23b088e24dcf6b77845823c5b5636b5c52434550f9b1837bc44ac3"
+    },
+    "cpp-testing": {
+      "source": "affaan-m/everything-claude-code",
+      "sourceType": "github",
+      "skillPath": "skills/cpp-testing/SKILL.md",
+      "computedHash": "fbe37695056aa5cf9454f8cf6d883f38c3bca0324ca7aeb288db2fe3b887e97d"
+    },
+    "cpu-kernels": {
+      "source": "huggingface/kernels",
+      "sourceType": "github",
+      "skillPath": "kernel-builder/skills/cpu-kernels/SKILL.md",
+      "computedHash": "e924d6c24da2db98df85fe7c95a26cb5e64e53e26c26dce3d7362d7dc36a35c5"
+    },
+    "cuda-kernels": {
+      "source": "huggingface/kernels",
+      "sourceType": "github",
+      "skillPath": "kernel-builder/skills/cuda-kernels/SKILL.md",
+      "computedHash": "1930f8d0085c8ab4b90afc3db6a84ed78cf7113e895b0fa5ac4e93327b12f093"
+    },
+    "deep-learning-pytorch": {
+      "source": "mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "deep-learning-pytorch/SKILL.md",
+      "computedHash": "c0bbc23461e1640cfcf1236ed453e3be5b5ff6e334b74c2bbb05b1b7de79691c"
+    },
+    "distributed-triage": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/distributed-triage/SKILL.md",
+      "computedHash": "cda165fa66985753543319d6fa9260fd624217cd44a6e880d29d7d2cd9bbaf45"
+    },
+    "docstring": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/docstring/SKILL.md",
+      "computedHash": "8f9ef1fd3551beb6d9760515930ab76e380195a27a675df013268c3fa50c83ce"
+    },
+    "document-public-apis": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/document-public-apis/SKILL.md",
+      "computedHash": "dee225dffa343cfc551a5da713d07b091771739e11cd65295c1190ffbe08a14e"
+    },
+    "fix-issue": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/fix-issue/SKILL.md",
+      "computedHash": "f70643b487e16d13607c41bcec8f1185cf7e8f88b5d7402116927fec9af34f41"
+    },
+    "gguf-quantization": {
+      "source": "zechenzhangagi/ai-research-skills",
+      "sourceType": "github",
+      "skillPath": "10-optimization/gguf/SKILL.md",
+      "computedHash": "5e103c14e7b7f7f7e77cf9561ec0c2ff053d112c520af77c76d416a6555a1d33"
+    },
+    "hf-cli": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/hf-cli/SKILL.md",
+      "computedHash": "8d7a3e2b59e574e4f2dd7f1c51efa49afcf057b39880395fa1121356a657daea"
+    },
+    "hf-mem": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/hf-mem/SKILL.md",
+      "computedHash": "8e38f548246956ff9c2b156bd143c7d5da892993baf8ac61b83687f1ff3102f6"
+    },
+    "huggingface-best": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-best/SKILL.md",
+      "computedHash": "c3655c565e3bc526c17a2a051f452e3ddecb699308ecbad3509439eec9ef811c"
+    },
+    "huggingface-community-evals": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-community-evals/SKILL.md",
+      "computedHash": "32eec43c4c176086132aefee5377b47e98095727289f128492da697dccbc1598"
+    },
+    "huggingface-datasets": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-datasets/SKILL.md",
+      "computedHash": "d28d1ee4a61133ab6c1e12c74094681c2026c7e656784bd09831f91618fd0120"
+    },
+    "huggingface-gradio": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-gradio/SKILL.md",
+      "computedHash": "267dadfa06166207300e6995c0f38ece48d56cfe0067865563955f36a252ed88"
+    },
+    "huggingface-llm-trainer": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-llm-trainer/SKILL.md",
+      "computedHash": "a607046533c251221fd745780cf9b1fd7902bbe51549711ac95413f79d1b8631"
+    },
+    "huggingface-local-models": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-local-models/SKILL.md",
+      "computedHash": "98d8dd87770bafa3dc8e777204264e2d57ea550b3e04aae805e93d1e45d056a8"
+    },
+    "huggingface-lora-space-builder": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-lora-space-builder/SKILL.md",
+      "computedHash": "707ad141ba5419954ff00203153249f5a27ac1584a3317d18df39c6bff10da80"
+    },
+    "huggingface-paper-publisher": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-paper-publisher/SKILL.md",
+      "computedHash": "f20ababe4c4dfdc5e1b9bb24ffbb95792efff0e56f16917f41f9d665e2d31bfe"
+    },
+    "huggingface-papers": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-papers/SKILL.md",
+      "computedHash": "d10f77f78592263ed257ff1be56ab53469490ada7e8158460037af88c52454a7"
+    },
+    "huggingface-spaces": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-spaces/SKILL.md",
+      "computedHash": "2a5f21a6fc618df89d0d4812db1b0ca7fa63d766a0a4c568e2a19981554ec126"
+    },
+    "huggingface-tool-builder": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-tool-builder/SKILL.md",
+      "computedHash": "5466e19d49b55fd0cec167f921acb01bb7473c30dee8f60962225efb96099908"
+    },
+    "huggingface-trackio": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-trackio/SKILL.md",
+      "computedHash": "744a4d7ee5dfa6f61b343e9c354dd1d080d283e0aca521b229ce94367e6e94be"
+    },
+    "huggingface-vision-trainer": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-vision-trainer/SKILL.md",
+      "computedHash": "bf5eff3c692372a798f1763f975ed2725794a55af4f0ba4de58492e7d83b8d75"
+    },
+    "huggingface-zerogpu": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/huggingface-zerogpu/SKILL.md",
+      "computedHash": "740dfb441230ae6a7ba08a19c357aee7b758b25d1fe435df3233adc144aa2dd0"
+    },
+    "metal-kernel": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/metal-kernel/SKILL.md",
+      "computedHash": "5e9dae43738d6346f8f43db55a3f4c9deede755e720df6bbf5795a39f401d345"
+    },
+    "nv-generate-vae-finetune": {
+      "source": "nvidia/skills",
+      "sourceType": "github",
+      "skillPath": "skills/nv-generate-vae-finetune/SKILL.md",
+      "computedHash": "e4a20ff2b69c7497854aed5a94ec4f722efe2c7dca5402f919747acca3a5dffd"
+    },
+    "physical-ai-defect-image-generation": {
+      "source": "nvidia/skills",
+      "sourceType": "github",
+      "skillPath": "skills/physical-ai-defect-image-generation/SKILL.md",
+      "computedHash": "43ef5b51544146e6d375e4299d7a64c02556a38ebd1f9f3abe68b49aa9044adc"
+    },
+    "physical-ai-infrastructure-setup-and-resilient-scaling": {
+      "source": "nvidia/skills",
+      "sourceType": "github",
+      "skillPath": "skills/physical-ai-infrastructure-setup-and-resilient-scaling/SKILL.md",
+      "computedHash": "f0c5dc290bce7085be5592d049677d43c381d79e8fe50ea3460ee81167463038"
+    },
+    "physical-ai-neural-reconstruction": {
+      "source": "nvidia/skills",
+      "sourceType": "github",
+      "skillPath": "skills/physical-ai-neural-reconstruction/SKILL.md",
+      "computedHash": "5481ac1ad1976fe3b2b888f03a1aca20823986f9f0f4512aa8f0fd7ac5247b5e"
+    },
+    "physical-ai-video-data-augmentation": {
+      "source": "nvidia/skills",
+      "sourceType": "github",
+      "skillPath": "skills/physical-ai-video-data-augmentation/SKILL.md",
+      "computedHash": "aecee8f9c1ce8aab43903d7d5d0ef394e64c6eff3a1d2da79e10fe7764c5763b"
+    },
+    "pr-review": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/pr-review/SKILL.md",
+      "computedHash": "3a740dbcd639075026b927de1b3fb3a8ac5380f8dd14c07d2d82256683403824"
+    },
+    "pt2-bug-basher": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/pt2-bug-basher/SKILL.md",
+      "computedHash": "20bef582bc1e68722ad00ec98352be2df2f7ccda2018dfd5c2a57f6fcefa79fd"
+    },
+    "pyrefly-type-coverage": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/pyrefly-type-coverage/SKILL.md",
+      "computedHash": "9f72febb0a33b7c7de53bd7474cd6415ac4e40af93b157cf5bfe0cc21312823c"
+    },
+    "pytorch-lightning": {
+      "source": "davila7/claude-code-templates",
+      "sourceType": "github",
+      "skillPath": "cli-tool/components/skills/ai-research/distributed-training-pytorch-lightning/SKILL.md",
+      "computedHash": "ca5ca05097e4ad9cc07db0a5f314303d751c447a78b80163058c75d586a7c9e9"
+    },
+    "pytorch-patterns": {
+      "source": "affaan-m/everything-claude-code",
+      "sourceType": "github",
+      "skillPath": "skills/pytorch-patterns/SKILL.md",
+      "computedHash": "001be53791f76c13e09c7b706df26ec27fb93dd43e19825e426a361bcf4e3d2e"
+    },
+    "rocm-kernels": {
+      "source": "huggingface/kernels",
+      "sourceType": "github",
+      "skillPath": "kernel-builder/skills/rocm-kernels/SKILL.md",
+      "computedHash": "159f6e2b99137bd87b3483c14e57a197d3d0769107c63101ff1b758f5d8841ac"
+    },
+    "rwkv-architecture": {
+      "source": "ovachiever/droid-tings",
+      "sourceType": "github",
+      "skillPath": "skills/rwkv/SKILL.md",
+      "computedHash": "1650eb51ded00400a2f2d9579437d1d11625fc6c63583cddfd8b6de243eabe87"
+    },
+    "scrub-issue": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/scrub-issue/SKILL.md",
+      "computedHash": "f2a7a56c2fe085af819b83fe8ccf78fc353eba549b3bb946d2cc33c55ad2ab75"
+    },
+    "skill-writer": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/skill-writer/SKILL.md",
+      "computedHash": "c220867183e2f6a32290b0c87d6dcc56ce507154e20ae7cb64ad91bee2d4677e"
+    },
+    "train-sentence-transformers": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/train-sentence-transformers/SKILL.md",
+      "computedHash": "3cff98a16b314cde34545912097128d6879d1c56b0397bf3d3ee07f7bd011fee"
+    },
+    "transformers-js": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/transformers-js/SKILL.md",
+      "computedHash": "f61c531d0cc9ee4cb714b5a651f4a7a939ce127f70333d44af179cbbb1663de1"
+    },
+    "triaging-issues": {
+      "source": "pytorch/pytorch",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/triaging-issues/SKILL.md",
+      "computedHash": "994883c07a90467dae187f32459506cab6b2bf1c223656b5b2c437a1212897d4"
+    },
+    "trl-training": {
+      "source": "huggingface/skills",
+      "sourceType": "github",
+      "skillPath": "skills/trl-training/SKILL.md",
+      "computedHash": "ae41062997a13dd9da1d73ecf111cffed04ebbd734bdaf5320c65f6f1c5b89a3"
+    },
+    "xpu-kernels": {
+      "source": "huggingface/kernels",
+      "sourceType": "github",
+      "skillPath": "kernel-builder/skills/xpu-kernels/SKILL.md",
+      "computedHash": "c132e79a5d818952e6d0fe24757adc5b1005625ba1edad63657243e46207cc89"
+    }
+  }
+}

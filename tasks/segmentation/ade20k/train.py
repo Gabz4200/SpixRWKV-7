@@ -31,7 +31,7 @@ if __name__ == "__main__":
 from datasets import load_dataset
 from torch.utils.data import DataLoader, IterableDataset
 
-from spixrwkv7 import create_vision_rwkv7
+from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
 
 # ---------------------------------------------------------------------------
@@ -226,7 +226,7 @@ class ADE20KSegModel(nn.Module):
 
     def __init__(self, config: dict, num_classes: int):
         super().__init__()
-        self.backbone = create_vision_rwkv7(
+        self.backbone = _create_model(
             img_size=config["img_size"],
             embed_dims=config["embed_dims"],
             num_heads=config["num_heads"],
@@ -423,7 +423,7 @@ def main() -> None:
     )
     val_loader = DataLoader(
         val_ds, batch_size=args.batch_size, num_workers=args.num_workers,
-        pin_memory=False,
+        pin_memory=True,
     )
 
     try:
@@ -527,7 +527,7 @@ def main() -> None:
         val_acc = 0.0
         val_miou = 0.0
         val_batches = 0
-        with torch.inference_mode():
+        with torch.no_grad():
             for inputs, targets in val_loader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 logits = model(inputs)

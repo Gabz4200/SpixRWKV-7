@@ -1,0 +1,82 @@
+========================================================================
+  SpixRWKV-7 — HumorDB Funniness Regression
+========================================================================
+  Device          CPU
+  Image size      64x64
+  Embed dims      128
+  Heads           2
+  Depth           4
+  Superpixels     36
+  Total params    1,240,854
+  Train params    1,240,854
+  Batch size      8
+  LR              0.0005
+  Weight decay    0.0001
+  Drop path       0.1
+  Epochs          5
+  Checkpoints     /home/gabz/Projects/Visual_RWKV7_Pytorch/checkpoints/humordb
+------------------------------------------------------------------------
+  Counting dataset splits...
+  Train: 2136  Val: 703  Test: 706
+  Preprocessing train set (2136 images)...
+    1/2136
+    200/2136
+    400/2136
+    600/2136
+    800/2136
+    1000/2136
+    1200/2136
+    1400/2136
+    1600/2136
+    1800/2136
+    2000/2136
+  Preprocessing validation set (703 images)...
+    1/703
+    200/703
+    400/703
+    600/703
+/home/gabz/Projects/Visual_RWKV7_Pytorch/.venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py:752: UserWarning: 'pin_memory' argument is set as true but no accelerator is found, then device pinned memory won't be used.
+  super().__init__(loader)
+  Train | Epoch   1/5 Batch    1/267 Loss 21.8637 LR 5.00e-04 GradNorm 144.20
+  Train | Epoch   1/5 Batch    5/267 Loss 22.4441 LR 5.00e-04 GradNorm 136.56
+  Train | Epoch   1/5 Batch   10/267 Loss 5.2057 LR 5.00e-04 GradNorm 51.67
+  Train | Epoch   1/5 Batch   15/267 Loss 3.2779 LR 5.00e-04 GradNorm 0.69
+  Train | Epoch   1/5 Batch   20/267 Loss 3.1478 LR 5.00e-04 GradNorm 26.02
+  Train | Epoch   1/5 Batch   25/267 Loss 4.5459 LR 5.00e-04 GradNorm 26.45
+  Train | Epoch   1/5 Batch   30/267 Loss 1.5596 LR 5.00e-04 GradNorm 15.04
+  Train | Epoch   1/5 Batch   35/267 Loss 4.0238 LR 5.00e-04 GradNorm 40.11
+  Train | Epoch   1/5 Batch   40/267 Loss 2.4624 LR 5.00e-04 GradNorm 13.07
+  Train | Epoch   1/5 Batch   45/267 Loss 5.4202 LR 5.00e-04 GradNorm 22.67
+  Train | Epoch   1/5 Batch   50/267 Loss 3.7939 LR 5.00e-04 GradNorm 24.70
+  Train | Epoch   1/5 Batch   55/267 Loss 4.4754 LR 5.00e-04 GradNorm 1.53
+  Train | Epoch   1/5 Batch   60/267 Loss 3.6914 LR 5.00e-04 GradNorm 20.70
+  Train | Epoch   1/5 Batch   65/267 Loss 6.4628 LR 5.00e-04 GradNorm 28.90
+  Train | Epoch   1/5 Batch   70/267 Loss 2.9007 LR 5.00e-04 GradNorm 7.70
+  Train | Epoch   1/5 Batch   75/267 Loss 2.1297 LR 5.00e-04 GradNorm 4.04
+  Train | Epoch   1/5 Batch   80/267 Loss 1.4553 LR 5.00e-04 GradNorm 9.67
+  Train | Epoch   1/5 Batch   85/267 Loss 0.9720 LR 5.00e-04 GradNorm 3.84
+  Train | Epoch   1/5 Batch   90/267 Loss 2.3323 LR 5.00e-04 GradNorm 8.62
+  Train | Epoch   1/5 Batch   95/267 Loss 4.5468 LR 5.00e-04 GradNorm 29.87
+  Train | Epoch   1/5 Batch  100/267 Loss 4.0537 LR 5.00e-04 GradNorm 6.71
+  Train | Epoch   1/5 Batch  105/267 Loss 5.7871 LR 5.00e-04 GradNorm 17.30
+  Train | Epoch   1/5 Batch  110/267 Loss 2.8790 LR 5.00e-04 GradNorm 20.63
+  Train | Epoch   1/5 Batch  115/267 Loss 6.0827 LR 5.00e-04 GradNorm 1.98
+  Train | Epoch   1/5 Batch  120/267 Loss 1.8402 LR 5.00e-04 GradNorm 16.47
+  Train | Epoch   1/5 Batch  125/267 Loss 2.5719 LR 5.00e-04 GradNorm 27.71
+  Train | Epoch   1/5 Batch  130/267 Loss 2.5713 LR 5.00e-04 GradNorm 9.52
+  Train | Epoch   1/5 Batch  135/267 Loss 4.6624 LR 5.00e-04 GradNorm 37.82
+  Train | Epoch   1/5 Batch  140/267 Loss 2.4944 LR 5.00e-04 GradNorm 24.98
+  Train | Epoch   1/5 Batch  145/267 Loss 1.3533 LR 5.00e-04 GradNorm 11.49
+  Train | Epoch   1/5 Batch  150/267 Loss 4.9811 LR 5.00e-04 GradNorm 33.80
+  Train | Epoch   1/5 Batch  155/267 Loss 4.6571 LR 5.00e-04 GradNorm 10.82
+  Train | Epoch   1/5 Batch  160/267 Loss 2.1078 LR 5.00e-04 GradNorm 16.01
+  Train | Epoch   1/5 Batch  165/267 Loss 4.9959 LR 5.00e-04 GradNorm 28.61
+  Train | Epoch   1/5 Batch  170/267 Loss 4.7891 LR 5.00e-04 GradNorm 18.50
+  Train | Epoch   1/5 Batch  175/267 Loss 2.2159 LR 5.00e-04 GradNorm 8.46
+  Train | Epoch   1/5 Batch  180/267 Loss 5.0573 LR 5.00e-04 GradNorm 1.27
+  Train | Epoch   1/5 Batch  185/267 Loss 4.3121 LR 5.00e-04 GradNorm 10.20
+  Train | Epoch   1/5 Batch  190/267 Loss 3.0493 LR 5.00e-04 GradNorm 12.83
+  Train | Epoch   1/5 Batch  195/267 Loss 5.7764 LR 5.00e-04 GradNorm 16.80
+  Train | Epoch   1/5 Batch  200/267 Loss 3.1296 LR 5.00e-04 GradNorm 7.28
+  Train | Epoch   1/5 Batch  205/267 Loss 2.7161 LR 5.00e-04 GradNorm 16.77
+  Train | Epoch   1/5 Batch  210/267 Loss 5.3634 LR 5.00e-04 GradNorm 47.78

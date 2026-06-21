@@ -1,0 +1,12 @@
+usage: sanity.py [-h] [--scale {tiny,small,medium,100m}]
+                 [--embed-dims EMBED_DIMS] [--num-heads NUM_HEADS]
+                 [--depth DEPTH] [--num-superpixels NUM_SUPERPIXELS]
+                 [--img-size IMG_SIZE] [--diff-slic-iters DIFF_SLIC_ITERS]
+                 [--num-train-images NUM_TRAIN_IMAGES]
+                 [--num-val-images NUM_VAL_IMAGES] [--epochs EPOCHS]
+                 [--batch-size BATCH_SIZE] [--lr LR]
+                 [--weight-decay WEIGHT_DECAY]
+                 [--drop-path-rate DROP_PATH_RATE] [--seed SEED]
+                 [--num-workers NUM_WORKERS] [--shuffle-buffer SHUFFLE_BUFFER]
+                 [--target-accuracy TARGET_ACCURACY]
+sanity.py: error: unrecognized arguments: --preset tiny

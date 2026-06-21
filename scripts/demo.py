@@ -1,7 +1,12 @@
 """SpixRWKV-7 demo: verify backbone with dummy image input."""
 
+import argparse
+import random
+import os
+
+import numpy as np
 import torch
-from spixrwkv7 import create_vision_rwkv7
+from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 from spixrwkv7.data.transforms import preprocess_image_for_rwkv7
 
 # Inspired by: https://arxiv.org/abs/2109.08203
@@ -12,79 +17,101 @@ TORCH_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def main():
+    parser = argparse.ArgumentParser(description="SpixRWKV-7 demo")
+    parser.add_argument("--img-size", type=int, default=512)
+    parser.add_argument("--embed-dims", type=int, default=192)
+    parser.add_argument("--num-heads", type=int, default=3)
+    parser.add_argument("--depth", type=int, default=12)
+    parser.add_argument("--num-superpixels", type=int, default=196)
+    parser.add_argument("--diff-slic-iters", type=int, default=5)
+    parser.add_argument("--norm-layer", type=str, default="rmsnorm")
+    parser.add_argument("--act-layer", type=str, default="swiglu")
+    parser.add_argument("--output", type=str, default="results/demo.txt")
+    args = parser.parse_args()
 
-    torch.set_default_device(TORCH_DEVICE)
+    from spixrwkv7.utils import redirect_stdout_tee
+    out_dir = os.path.dirname(args.output)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
 
-    # Initialize the new Vision-RWKV-7 with Superpixel Tokenization (diffSLIC)
-    model = create_vision_rwkv7(
-        img_size=64,
-        embed_dims=192,
-        num_heads=3,
-        depth=12,
-        init_values=1e-5,
-        final_norm=True,
-        out_indices=[3, 5, 7, 11],
-        num_superpixels=196,  # Target number of superpixels (approx 14x14 grid)
-        scatter_output=True,  # Scatter back to original resolution for this demo
-        diff_slic_iters=5,  # Number of iterations for diffSLIC optimization
-    )
+    with redirect_stdout_tee(args.output):
+        # Initialize the new Vision-RWKV-7 with Superpixel Tokenization (diffSLIC)
+        model = _create_model(
+            img_size=args.img_size,
+            embed_dims=args.embed_dims,
+            num_heads=args.num_heads,
+            depth=args.depth,
+            init_values=1e-5,
+            final_norm=True,
+            out_indices=[args.depth - 1],
+            num_superpixels=args.num_superpixels,
+            scatter_output=True,
+            diff_slic_iters=args.diff_slic_iters,
+            norm_layer=args.norm_layer,
+            act_layer=args.act_layer,
+        )
 
-    callable_model = model.eval().to(TORCH_DEVICE)
+        # Model created on CPU, then moved to device (standard PyTorch pattern)
+        callable_model = model.eval().to(TORCH_DEVICE)
 
-    if TORCH_DEVICE == "cuda":
-        callable_model = torch.compile(
-            callable_model
-        )  # On CPU this actually makes it slower, but on CUDA it can be much faster after the initial warmup.
+        if TORCH_DEVICE == "cuda":
+            callable_model = torch.compile(
+                callable_model
+            )  # On CPU this actually makes it slower, but on CUDA it can be much faster after the initial warmup.
 
-    with torch.no_grad():
-        for seed in seeds:
-            torch.manual_seed(seed)
-            print(f"\n=== Testing seed {seed} ===")
+        with torch.no_grad():
+            for seed in seeds:
+                torch.manual_seed(seed)
+                np.random.seed(seed)
+                random.seed(seed)
+                print(f"\n=== Testing seed {seed} ===")
 
-            # Reset standard PyTorch layers (LayerNorm, Linear, etc.)
-            model.apply(lambda m: getattr(m, "reset_parameters", lambda: None)())
+                # Reset standard PyTorch layers (LayerNorm, Linear, etc.)
+                model.apply(lambda m: getattr(m, "reset_parameters", lambda: None)())
 
-            # Reset your custom RWKV parameters
-            model._init_weights()
+                # Reset your custom RWKV parameters
+                model._init_weights()
 
-            # Dummy image input
-            x_raw = preprocess_image_for_rwkv7(
-                "test_image_from_slirack_pinterest.jpg",
-                target_size=(64, 64),
-                include_alpha=True,
-            )
-            # x_raw is already (1, 6, 64, 64) from preprocess_image_for_rwkv7
-            x = x_raw.to(TORCH_DEVICE)
+                # Dummy image input
+                x_raw = preprocess_image_for_rwkv7(
+                    "test_image_from_slirack_pinterest.jpg",
+                    target_size=(args.img_size, args.img_size),
+                    include_alpha=True,
+                )
+                # x_raw is already (1, 6, H, W) from preprocess_image_for_rwkv7
+                x = x_raw.to(TORCH_DEVICE)
 
-            # Forward pass
-            outs = callable_model(x)
+                # Forward pass
+                outs = callable_model(x)
 
-            print(f"Input:  {tuple(x.shape)}")
-            print(f"Output levels:  {len(outs)}")
-            for i, o in enumerate(outs):
-                print(f"  level {i}: {tuple(o.shape)}")
+                print(f"Input:  {tuple(x.shape)}")
+                print(f"Output levels:  {len(outs)}")
+                for i, o in enumerate(outs):
+                    print(f"  level {i}: {tuple(o.shape)}")
 
-            total = sum(p.numel() for p in model.parameters())
-            print(f"\nTotal params: {total / 1e6:.2f}M")
+                total = sum(p.numel() for p in model.parameters())
+                print(f"\nTotal params: {total / 1e6:.2f}M")
 
-            # Verify no NaN/Inf
-            all_finite = all(o.isfinite().all() for o in outs)
-            print(f"All outputs finite: {all_finite}")
+                # Verify no NaN/Inf
+                all_finite = all(o.isfinite().all() for o in outs)
+                print(f"All outputs finite: {all_finite}")
 
-            # Verify deterministic: same input -> same output
-            outs2 = callable_model(x)
-            deterministic = all(
-                (o1 - o2).abs().max().item() < 1e-5 for o1, o2 in zip(outs, outs2)
-            )
-            print(f"Deterministic: {deterministic}")
+                # Verify deterministic: same input -> same output
+                outs2 = callable_model(x)
+                deterministic = all(
+                    (o1 - o2).abs().max().item() < 1e-5 for o1, o2 in zip(outs, outs2)
+                )
+                print(f"Deterministic: {deterministic}")
 
-            # Cleanup Memory
-            del x, outs, outs2
-            if TORCH_DEVICE == "cuda":
-                torch.cuda.empty_cache()
-    del model, callable_model
-    if TORCH_DEVICE == "cuda":
-        torch.cuda.empty_cache()
+                # Cleanup Memory
+                del x, outs, outs2
+                if TORCH_DEVICE == "cuda":
+                    torch.cuda.empty_cache()
+        del model, callable_model
+        if TORCH_DEVICE == "cuda":
+            torch.cuda.empty_cache()
+
+    print(f"Results saved to {args.output}")
 
 
 if __name__ == "__main__":

@@ -7,17 +7,21 @@ sections prefixed with [EXPERIMENT] for easy parsing.
 
 import argparse
 import math
+import random
 import sys
 import time
+import os
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from spixrwkv7 import ClassificationHead, create_vision_rwkv7
+from spixrwkv7 import ClassificationHead
+from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 
 
 def synth_batch(batch_size, num_classes, img_size, device):
@@ -27,8 +31,8 @@ def synth_batch(batch_size, num_classes, img_size, device):
 
 
 def build_model(depth, embed_dims, num_heads, num_superpixels, device):
-    backbone = create_vision_rwkv7(
-        img_size=64,
+    backbone = _create_model(
+        img_size=512,
         embed_dims=embed_dims,
         num_heads=num_heads,
         depth=depth,
@@ -42,6 +46,8 @@ def build_model(depth, embed_dims, num_heads, num_superpixels, device):
         diff_slic_iters=1,
         compactness=0.5,
         drop_path_rate=0.0,
+        norm_layer="rmsnorm",
+        act_layer="swiglu",
     ).to(device)
     backbone._init_weights()
     head = ClassificationHead(embed_dims, 10).to(device)
@@ -59,11 +65,13 @@ def run(
     num_heads: int = 2,
     num_superpixels: int = 36,
     lr: float = 5e-4,
-    max_steps: int = 100,
+    max_steps: int = 2,
     seed: int = 42,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
 
     log(f"START label={label} seed={seed} depth={depth} "
         f"embed_dims={embed_dims} lr={lr}")
@@ -78,7 +86,7 @@ def run(
         list(backbone.parameters()) + list(head.parameters()),
         lr=lr, weight_decay=0.0,
     )
-    x, y = synth_batch(4, 10, 64, device)
+    x, y = synth_batch(4, 10, 512, device)
 
     # Track metrics
     losses, accs, grad_norms = [], [], []
@@ -90,7 +98,7 @@ def run(
         t0 = time.perf_counter()
         backbone.train()
         head.train()
-        opt.zero_grad()
+        opt.zero_grad(set_to_none=True)
         outs = backbone(x)
         logits = head(outs[0])
         loss = F.cross_entropy(logits, y)
@@ -196,7 +204,7 @@ def exp_seeds():
 def exp_gradient_deep():
     """Run a deeper model (depth=4) and track per-layer gradients."""
     log("=== GRADIENT DIAGNOSTIC (depth=4) ===")
-    run(label="grad-diag-depth4", depth=4, max_steps=150)
+    run(label="grad-diag-depth4", depth=4, max_steps=2)
     print()
 
 def exp_no_head():
@@ -204,8 +212,10 @@ def exp_no_head():
     log("=== NO-HEAD FEATURE SANITY ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(42)
+    np.random.seed(42)
+    random.seed(42)
+    x, _ = synth_batch(4, 10, 512, device)
     backbone, _ = build_model(2, 128, 2, 36, device)
-    x, _ = synth_batch(4, 10, 64, device)
     with torch.no_grad():
         outs = backbone(x)
         feat = outs[0]
@@ -232,13 +242,17 @@ if __name__ == "__main__":
     if not any(v for v in vars(args).values() if v is True):
         args.all = True
 
-    if args.all or args.lr_sweep:
-        exp_lr_sweep()
-    if args.all or args.depth:
-        exp_depth()
-    if args.all or args.seeds:
-        exp_seeds()
-    if args.all or args.grad_deep:
-        exp_gradient_deep()
-    if args.all or args.no_head:
-        exp_no_head()
+    from spixrwkv7.utils import redirect_stdout_tee
+    os.makedirs('results', exist_ok=True)
+    with redirect_stdout_tee('results/diagnose_training.txt'):
+        if args.all or args.lr_sweep:
+            exp_lr_sweep()
+        if args.all or args.depth:
+            exp_depth()
+        if args.all or args.seeds:
+            exp_seeds()
+        if args.all or args.grad_deep:
+            exp_gradient_deep()
+        if args.all or args.no_head:
+            exp_no_head()
+    print('Results saved to results/diagnose_training.txt')

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Debug NaN in ADE20K forward pass — trace through each stage."""
+import random
 import sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
@@ -58,6 +59,8 @@ cfg = dict(
 )
 
 torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
 device = torch.device("cpu")
 
 # --- Load model ---
@@ -90,7 +93,7 @@ print(f"Balanced has Inf: {torch.isinf(balanced).any().item()}")
 
 # --- Trace NaN through forward pass ---
 print("\n--- Forward pass ---")
-with torch.inference_mode():
+with torch.no_grad():
     try:
         outs = model(balanced.to(device))
         for i, o in enumerate(outs):

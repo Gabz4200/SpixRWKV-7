@@ -10,10 +10,13 @@ bad optimization setup, not a weak architecture.
 
 import argparse
 import math
+import random
 import sys
 import time
+import os
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -23,17 +26,15 @@ if __name__ == "__main__":
     _ROOT = Path(__file__).resolve().parent.parent.parent
     sys.path.insert(0, str(_ROOT))
 
-from spixrwkv7 import (
-    ClassificationHead,
-    create_vision_rwkv7,
-)
+from spixrwkv7 import ClassificationHead
+from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 
 # ---------------------------------------------------------------------------
 # Default hyper-parameters (tuned for single-batch overfit)
 # ---------------------------------------------------------------------------
 _BATCH_SIZE = 8
 _NUM_CLASSES = 10
-_IMG_SIZE = 64
+_IMG_SIZE = 512
 _NUM_SUPERPIXELS = 128  # ~11x11 grid for speed
 _BATCH_SIZE = 4
 _NUM_SUPERPIXELS = 36    # ~6x6 grid — fewest tokens for speed
@@ -98,13 +99,15 @@ def main() -> None:
 
     # ---- Seed everything ----
     torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
     if device.type == "cuda":
         torch.cuda.manual_seed_all(args.seed)
 
     # ------------------------------------------------------------------
     # Model
     # ------------------------------------------------------------------
-    backbone = create_vision_rwkv7(
+    backbone = _create_model(
         img_size=args.img_size,
         embed_dims=args.embed_dims,
         num_heads=args.num_heads,
@@ -119,6 +122,8 @@ def main() -> None:
         diff_slic_iters=1,  # single iter — fast enough to check convergence
         compactness=0.5,
         drop_path_rate=_DROP_PATH,
+        norm_layer="rmsnorm",
+        act_layer="swiglu",
     ).to(device)
 
     # Re-init weights for reproducibility
@@ -188,7 +193,7 @@ def main() -> None:
 
         backbone.train()
         head.train()
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
         # Forward
         outs = backbone(x)          # tuple of tensors, one per out_indices
@@ -259,4 +264,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from spixrwkv7.utils import redirect_stdout_tee
+    os.makedirs('results', exist_ok=True)
+    with redirect_stdout_tee('results/fast_test_training.txt'):
+        main()
+    print('Results saved to results/fast_test_training.txt')

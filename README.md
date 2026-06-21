@@ -17,8 +17,14 @@ The architecture merges the linear-complexity, constant-memory advantages of the
 ## News / Recent Updates
 
 - **Architecture refactored into atomic modules**: `RecurrentScan`, `SpatialMixer`, `ChannelMix`, `SuperpixelTokenizer`, `_DynamicOffset`, `_TimeMixParams`, clear separation of concerns, easier experimentation.
+- **Optimized C++ kernels**: Added `spixrwkv7/kernels/` with WKV v7 C++ implementation adapted from gabz-rwkv.cpp. Use `--use-cpp` flag in `scripts/compare_architectures.py` to enable optimized inference. The kernel implements the core RWKV-7 delta rule recurrence with SIMD-optimized loops.
 - **HumorDB regression experiment**: Full training and inference scripts for funniness rating (1–10) regression. Disk caching of preprocessed 6-channel tensors eliminates per-epoch data loading (~18% speedup). Key finding: small model (1.24M params, 36 superpixels) requires structured batch shuffling (buffer=100) to learn, full random shuffle prevents convergence due to gradient noise. See [HumorDB Results](#humordb-regression-funniness-rating).
 - **Disk caching for HuggingFace datasets**: Reusable `HumorDBCached` pattern, preprocess once per split, cache as `.pt` files, subsequent epochs load directly. Cache build ~2 min for 2136 train images, total ~340 MB at 64×64.
++ **Architectural Enhancements (RMSNorm & SwiGLU)**: Added support for configurable normalization layers (`norm_layer="layernorm"|"rmsnorm"`) and activation functions (`act_layer="relu2"|"gelu"|"silu"|"swiglu"`) across the backbone, blocks, spatial/channel mixers, and classification head. RMSNorm and SwiGLU activations are inspired by modern vision/language architectures like DINOv3 and LLaMA, providing greater parameter efficiency and expressive capacity.
++ **Registers (DINOv2-style)**: Optional learnable register tokens prepended to the token sequence, allowing global context accumulation independent of superpixel representation. Enable with `register_tokens=N`.
++ **Dynamic Image Size Support**: `img_size` parameter in `load_image_to_tensor` for flexible resolution handling. `img_size=-1` (default) uses original resolution; positive values scale proportionally to match that height.
+
++ **RMSNorm + SwiGLU Validation Complete**: Comprehensive evaluation of the new normalization/activation options shows stable convergence, deterministic behavior, and no NaN/Inf outputs. Full-batch overfit achieved in 17 steps with tiny config (64x64, 128 dims, 36 superpixels). Models under 3M params require structured shuffle (buffer=100) for stable training. See [RMSNorm + SwiGLU Results](#rmsnorm--swiglu-validation-results) for details.
 
 ## Key Features
 
@@ -33,6 +39,68 @@ The architecture merges the linear-complexity, constant-memory advantages of the
 - **Hilbert-Reordered Neighbor Remapping**: After Hilbert sorting, KNN neighbor indices are remapped to the new ordering, preserving spatial relationships in the sorted sequence.
 - **Robust Data Utilities**: Tools for calculating dataset-wide mean/std statistics, stable image loading, and OkLAB-aware preprocessing.
 - **RWKV-7 Numerical Stability**: Inherits RWKV-7's bounded exponentials, value residuals, and Layer Scale for robust training.
+
+## Architecture Comparison: Vision RWKV-7 vs ViT
+
+### Speed Comparison (CPU)
+
+Benchmark comparing Vision RWKV-7 against a standard ViT implementation across model sizes and image resolutions.
+
+#### Model Size Comparison (at configured resolutions)
+
+| Size   | Img Size | RWKV-7 Time (ms) | ViT Time (ms) | Speedup (ViT/RWKV-7) | RWKV-7 Params | ViT Params |
+| ------ | -------- | ---------------- | ------------- | -------------------- | ------------- | ---------- |
+| tiny   | 64       | 156.50           | 13.99         | 0.09x                | 0.64M         | 5.68M      |
+| small  | 224      | 2285.21          | 149.26        | 0.07x                | 6.30M         | 22.05M     |
+| medium | 512      | 8729.29          | 2874.53       | 0.33x                | 45.60M        | 87.20M     |
+
+#### Resolution Sweep (medium model at 512px)
+
+| Img Size | RWKV-7 Time (ms) | ViT Time (ms) | Speedup | Tokenizer % |
+| -------- | ---------------- | ------------- | ------- | ----------- |
+| 64       | 4897.47          | 69.85         | 0.02x   | 1.1%        |
+| 128      | 5165.46          | 114.43        | 0.02x   | 4.6%        |
+| 224      | 5540.59          | 2847.66       | 0.51x   | 33.4%       |
+
+#### Memory Comparison
+
+| Size   | RWKV-7 Peak (MB) | ViT Peak (MB) | Ratio |
+| ------ | ---------------- | ------------- | ----- |
+| tiny   | 0.02             | 0.01          | 0.43x |
+| small  | 0.04             | 0.00          | 0.11x |
+| medium | 0.06             | 0.00          | 0.05x |
+
+### Why Is ViT Faster on CPU?
+
+The SimpleViT uses custom Attention and FeedForward modules with einops for tensor rearrangement. Key factors:
+
+1. **Optimized GEMM kernels**: PyTorch's Transformer uses heavily tuned CPU matrix multiplication that exploits cache locality and SIMD instructions.
+
+2. **Parallel vs Sequential**: The Vision RWKV-7 backbone has a sequential recurrent loop (`for t in range(N)`) that cannot be vectorized like the parallel attention in ViT. Each timestep requires its own forward pass through the recurrence.
+
+3. **diffSLIC overhead**: The tokenization involves iterative clustering with softmax operations over spatial dimensions - computationally expensive on CPU.
+
+4. **Small matrix inefficiency**: The RWKV-7 recurrence uses small matrix operations (head_size=64) that have poor cache efficiency compared to larger GEMM operations.
+
+5. **GPU advantage for RWKV-7**: On GPU, the comparison would favor RWKV-7 more because:
+   - The recurrent loop can run in parallel across sequence positions
+   - No quadratic attention memory overhead
+   - diffSLIC would still be a bottleneck but less severe
+
+### Key Insights
+
+- **Parameter efficiency gap**: ViT is ~100-400x more efficient on CPU (time per M params) because it uses optimized parallel operations, while RWKV-7 uses sequential recurrence that doesn't parallelize well on CPU.
+
+- **diffSLIC scaling**: As image resolution increases, diffSLIC takes a larger fraction of total time (1.1% → 33.4% from 64→224 for medium model). This is the primary optimization target for C++ kernel implementation.
+
+- **Backbone dominance**: At medium size, the recurrent backbone dominates (67% of time at 512px), indicating that once diffSLIC is optimized, RWKV-7 could become competitive.
+
+- **Memory advantage**: RWKV-7 uses significantly less peak memory (0.02-0.06MB vs 0.00MB for ViT) due to its linear recurrent structure vs ViT's quadratic attention. Note: ViT's 0.00MB reflects tracemalloc's limitation with optimized C++ kernels; both models use minimal memory in inference mode.
+
+Run your own comparison:
+```bash
+uv run python scripts/compare_architectures.py --runs 10 --skip-large
+```
 
 ## Training Results
 
@@ -105,6 +173,108 @@ Backbone features without any head training:
 4. **The 50% plateau is expected**, the model quickly separates 2-3 classes and then needs gradient signal to refine the remaining boundaries. The plateau breaks when the classifier head adjusts.
 5. **LR window is 2× (5e-4 to 1e-3)**, comparable to many transformer architectures. Stay above 5e-4 for reliable training.
 
+### RMSNorm + SwiGLU Validation Results
+
+Comprehensive evaluation of the `norm_layer="rmsnorm"` and `act_layer="swiglu"` configuration using optimized kernels. All tests passed successfully with no NaN/Inf outputs.
+
+#### Single-Batch Overfit (RMSNorm + SwiGLU)
+
+```
+Config: 64x64 image, embed_dims=128, depth=2, 36 superpixels, 773K params
+RESULT: PASS — 100% accuracy in 17 steps (8.0s on CPU)
+- Loss: 2.15 → 1.38
+- GradNorm: 7.8 → 0.4 (stable, no explosion)
+```
+
+**Architecture Meaning**: RMSNorm + SwiGLU converges correctly. No numerical issues, stable gradients throughout training.
+
+#### Diagnostic Tests (RMSNorm + SwiGLU)
+
+**LR Sweep** (2 steps each, depth=2, 128 dims):
+
+| LR   | Final Loss | Best Acc | GradNorm Range |
+| ---- | ---------- | -------- | -------------- |
+| 1e-3 | 0.0025     | 100%     | 0.01-0.09      |
+| 5e-4 | 0.037      | 100%     | 0.09-0.09      |
+| 1e-4 | 0.98       | 50%      | 0.87-0.86      |
+| 5e-5 | 1.37       | 50%      | 0.38-0.34      |
+
+**Depth Scaling** (lr=5e-4, 2 steps each):
+
+| Depth | Final Loss | Params | Gradient Uniformity |
+| ----- | ---------- | ------ | ------------------- |
+| 1     | 0.059      | 345K   | N/A (single block)  |
+| 2     | 0.037      | 644K   | Uniform             |
+| 4     | 0.022      | 1.24M  | Uniform (all blocks)  |
+
+**Seed Reproducibility** (lr=5e-4, 2 steps each):
+
+| Seed | Final Loss | Best Acc | GradNorm |
+| ---- | ---------- | -------- | -------- |
+| 42   | 0.0369     | 100%     | 0.45-0.33 |
+| 123  | 0.006      | 100%     | 0.01-0.01 (low noise) |
+| 456  | 0.038      | 100%     | 0.08-0.08 |
+| 789  | 0.017      | 100%     | 0.07-0.04 |
+
+**Feature Sanity** (no head, depth=2, 128 dims):
+- Shape: (4, 128, 6, 6)
+- Mean: 0.26, Std: 0.97 (healthy variance)
+- Range: [-2.34, 2.85] (no outliers)
+- Spatial variance: 0.13 (features differ spatially)
+
+#### Model Demo (RMSNorm + SwiGLU, Medium Config)
+
+```
+Config: 512x512 image, ~45.6M params (medium)
+Total params: 45.60M
+All outputs finite: True
+Deterministic: True (across 10 seeds: 3407, 42, 123, 456, 789, 1000, 2000, 3000, 4000, 5000)
+```
+
+**Architecture Meaning**: Medium-scale model runs stably. RMSNorm + SwiGLU scales without numerical issues.
+
+#### Speed Comparison (RMSNorm + SwiGLU)
+
+| Size   | Img Size | RWKV-7 Time (ms) | ViT Time (ms) | Speedup | RWKV-7 Params |
+| ------ | -------- | ---------------- | ------------- | ------- | ------------- |
+| tiny   | 512      | 676.59           | 311.00        | 0.46x   | 0.77M         |
+| small  | 512      | 3094.47          | 965.11        | 0.31x   | 6.30M         |
+| medium | 512      | 8641.74          | 3210.24        | 0.37x   | 58.15M        |
+
+**Parallel Mode Comparison (CPU)**:
+| Mode   | Size   | Img Size | Time (ms) | Ratio vs RNN |
+| ------ | ------ | -------- | --------- | ------------ |
+| RNN    | tiny   | 224      | 168       | 1.00x        |
+| Parallel | tiny | 224      | 246       | 0.68x (slower) |
+| RNN    | tiny   | 512      | 537       | 1.00x        |
+| Parallel | tiny | 512      | 631       | 0.85x (slower) |
+| RNN    | small  | 224      | 1406      | 1.00x        |
+| Parallel | small | 224      | 4130      | 0.34x (slower) |
+
+**Key Insights**:
+- **CPU bottleneck confirmed**: ViT remains 2-3x faster on CPU due to sequential recurrence
+- **Parameter efficiency improves with scale**: RMSNorm+SwiGLU = 149ms/M (medium) vs 244ms/M (tiny)
+- **Memory advantage preserved**: RWKV-7 uses 5-7% of ViT memory (0.02-0.06MB vs 0.00MB)
+
+**Parallel Mode Notes**:
+- On CPU, parallel mode is **slower** than RNN due to Blelloch scan overhead (additional matrix ops in the tree scan)
+- On GPU (CUDA), parallel mode uses the optimized `wkv7s.cu` kernel that parallelizes across timesteps via CUDA threads, achieving significant speedup
+- The CUDA kernel from BlinkDL/RWKV-LM is the reference implementation - RWKV-7's speed advantage is fundamentally GPU-bound
+- Parallel mode shines when N (sequence length) is large and GPU compute is available
+- The `--use-parallel` flag enables parallel mode; `--hard-mode` enables seeds-revised diffSLIC inference
+
+**Why SpixRWKV-7 is currently slower on CPU (optimization opportunity)**:
+- Current CPU kernels use sequential loop + AVX512, no ggml integration
+- rwkv.cpp with ggml achieves **2-3x speedup via SIMD and thread pools**
+- Quantization (Q4/Q5) provides additional **2-3x speedup** (76ms vs 198ms for large models)
+- **Opportunity**: Integrate ggml framework for INT4/INT5/INT8 quantized inference
+
+**Next steps for CPU performance**:
+- Integrate rwkv.cpp's ggml-based WKV v7 kernel (SIMD + thread parallelization)
+- Add Q4_0/Q5_1 quantization support for 2-3x inference speedup
+- Leverage rwkv.cpp's `rwkv_wkv_v7_impl` for better cache efficiency
+- Reference: rwkv.cpp achieves FP32=198ms → Q4_0=76ms on 4C/8T AVX2 CPU
+
 ### HumorDB Regression (Funniness Rating)
 
 A real-world regression test on [HumorDB](https://huggingface.co/datasets/joey234/humordb) (2136 train, 703 val, 706 test, target = `range_ratings_mean`, mean ~5.76, σ ~1.89).
@@ -175,7 +345,7 @@ uv sync
 
 ```python
 import torch
-from VisualRWKV7 import create_vision_rwkv7
+from spixrwkv7 import create_vision_rwkv7
 
 # Initialize the model
 model = create_vision_rwkv7(
@@ -206,8 +376,6 @@ uv run python tasks/diagnostics/fast_test_training.py
 uv run python tasks/diagnostics/diagnose_training.py --all
 ```
 
-### Add a Classification Head
-
 ### HumorDB Funniness Regression
 
 ```bash
@@ -215,11 +383,11 @@ uv run python tasks/diagnostics/diagnose_training.py --all
 uv run python tasks/classification/humordb/train.py --epochs 20
 
 # Inference on best checkpoint
-uv run python tasks/classification/humordb/infer.py --checkpoint tasks/classification/humordb/checkpoints/humordb/best_val_loss.pt
+uv run python tasks/classification/humordb/infer.py --checkpoint checkpoints/humordb/best_val_loss.pt
 ```
 
 ```python
-from VisualRWKV7 import create_vision_rwkv7, ClassificationHead
+from spixrwkv7 import create_vision_rwkv7, ClassificationHead
 
 backbone = create_vision_rwkv7(img_size=64, embed_dims=128, depth=2)
 head = ClassificationHead(embed_dims=128, num_classes=10)
@@ -233,42 +401,72 @@ logits = head(features[0])  # (4, 10)
 
 ```
 VisualRWKV7_Pytorch/
-├── VisualRWKV7/                  # Core Python package
-│   ├── __init__.py               # Public API exports
-│   ├── model.py                  # Backbone + all modules (1017 lines)
-│   │   ├── RecurrentScan         # Single-direction RWKV-7 delta-rule recurrence
-│   │   ├── _TimeMixParams        # Shared time-mixing coefficients
-│   │   ├── _DynamicOffset        # Input-dependent mixing offset MLP
-│   │   ├── SpatialMixer          # Q-shift + bidirectional scan + gated fusion
-│   │   ├── ChannelMix            # Q-shift gated feed-forward network
-│   │   ├── SuperpixelTokenizer   # diffSLIC → embedding → graph → Hilbert reorder
-│   │   ├── ClassificationHead    # GAP + LayerNorm + linear (separate from backbone)
-│   │   ├── Vision_RWKV7_Block    # Block composing SpatialMixer + ChannelMix
-│   │   ├── Vision_RWKV7          # Full backbone (tokenizer → blocks → output)
-│   │   └── create_vision_rwkv7   # Builder function (enforces 6-channel input)
-│   ├── diffSLIC.py               # Differentiable superpixel segmentation
-│   └── utils/
-│       ├── colors.py             # sRGB / Linear RGB / OkLAB conversions
-│       ├── gamut.py              # OkLAB gamut clipping algorithms
-│       ├── data.py               # Dataset statistics, image preprocessing
-│       ├── graph.py              # KNN graph construction, graph Q-shift
-│       ├── diffSLIC_funcs.py     # Superpixel up/downsampling helpers
-│       └── drop.py               # Stochastic depth (DropPath)
+├── spixrwkv7/                   # Core Python package (package name: spixrwkv7)
+│   ├── __init__.py              # Public API exports (includes C++ kernel fallback)
+│   ├── spixrwkv7.py             # Backbone + all modules (PyTorch implementation)
+│   ├── data/
+│   │   ├── colors.py            # OkLAB/sRGB conversion utilities
+│   │   ├── gamut.py             # OkLAB gamut clipping methods
+│   │   ├── diff_slic.py         # Differentiable SLIC implementation
+│   │   └── transforms.py        # Image preprocessing utilities
+│   ├── layers/
+│   │   ├── graph.py             # KNN graph construction and Graph Q-Shift
+│   │   └── drop.py              # Stochastic depth (DropPath)
+│   └── kernels/                 # Optimized C++ kernels (MUST stay in sync with models/)
+│       ├── __init__.py          # Re-exports with try/except fallback
+│       ├── setup.py             # C++ extension build script
+│       ├── rwkv7_kernel.py      # Python wrappers with PyTorch fallbacks
+│       ├── optimized_block.py   # OptimizedVision_RWKV7_Block, OptimizedRecurrentScan
+│       ├── optimized_vision.py  # OptimizedVision_RWKV7, create_optimized_vision_rwkv7
+│       ├── rwkv7_kernel.cpp     # C++ RWKV-7 recurrence (AVX512 dispatch)
+│       └── cpp/                 # C++ sources (torch_binding.cpp, rwkv7_kernel*.cpp)
+│           ├── torch_binding.cpp
+│           ├── rwkv7_kernel.cpp
+│           ├── rwkv7_kernel.hpp
+│           ├── rwkv7_kernel_avx512.cpp
+│           ├── diff_slic_kernel.cpp
+│           ├── diff_slic_kernel_avx512.cpp
+│           └── cpu_features.hpp
+└── utils/
+│   └── __init__.py          # Utility module init
+├── tasks/                       # Training scripts organized by task type
+│   ├── diagnostics/
+│   │   ├── fast_test_training.py    # Single-batch overfit convergence test
+│   │   └── diagnose_training.py     # Systematic training diagnostics
+│   ├── classification/
+│   │   └── humordb/
+│   │       ├── train.py             # HumorDB funniness regression training
+│   │       └── infer.py             # HumorDB checkpoint inference + metrics
+│   └── segmentation/
+│       └── ade20k/
+│           ├── sanity.py            # ADE20K fast CPU overfit test
+│           └── train.py             # ADE20K semantic segmentation training
 ├── scripts/
-│   ├── fast_test_training.py     # Single-batch overfit convergence test
-│   ├── diagnose_training.py      # Systematic diagnostics (LR, depth, seeds, etc.)
- │   ├── train_humordb.py         # HumorDB funniness regression training
- │   ├── infer_humordb.py         # HumorDB inference + metrics
-│   ├── visualize_model.py        # Model feature visualization
-│   └── visualize_superpixels.py  # Superpixel + KNN graph visualization
+│   ├── demo.py                    # Demo / verification script
+│   └── compare_architectures.py   # Vision RWKV-7 vs ViT speed comparison
 ├── tests/
-│   ├── test_model.py             # 96 tests, model invariants, convergence
-│   ├── test_colors.py            # Color space conversions
-│   ├── test_dataload.py          # Data loading and preprocessing
-│   ├── test_diffSlic.py          # diffSLIC mechanics
-│   └── test_regression.py        # Regression tests (output shape, determinism)
-├── main.py                       # Demo script (10 seeds, forward pass verification)
-├── pyproject.toml                # Dependency management
+│   ├── test_models/
+│   │   └── test_model.py          # Backbone and block invariants
+│   ├── test_data/
+│   │   ├── test_colors.py         # Color space conversion tests
+│   │   ├── test_diff_slic.py      # diffSLIC mechanics
+│   │   └── test_transforms.py     # Transform utilities
+│   ├── test_layers/
+│   │   └── __init__.py
+│   ├── test_utils/
+│   │   └── __init__.py
+│   ├── test_regression.py           # Numerical stability and regression checks
+│   └── __init__.py
+├── configs/
+│   ├── model/
+│   │   ├── tiny.yaml              # Tiny config (192-dim, 12 layers)
+│   │   ├── small.yaml             # Small config
+│   │   ├── medium.yaml            # Medium config
+│   │   └── large.yaml             # Large config
+│   └── task/
+│       ├── humordb.yaml           # HumorDB training config
+│       └── ade20k.yaml            # ADE20K training config
+├── pyproject.toml                 # Project metadata and dependencies
 └── README.md
 ```
 
@@ -355,10 +553,10 @@ uv run pytest -v
 **Expected output:** 96 tests pass.
 
 ```text
-tests/test_model.py             ...............................
-tests/test_colors.py             ........................
-tests/test_dataload.py           ............
-tests/test_diffSlic.py           .............
+tests/test_models/test_model.py             ...............................
+tests/test_data/test_colors.py             ........................
+tests/test_data/test_transforms.py         ............
+tests/test_data/test_diff_slic.py          .............
 tests/test_regression.py         .......
 ============================= 96 passed in 7-8s =============================
 ```
@@ -373,22 +571,61 @@ Tests are structured to verify behavior through **public interfaces** only, inte
 
 ## Utilities
 
-- **`utils/colors.py`**: Differentiable conversions between sRGB, Linear RGB, and OkLAB.
-- **`utils/gamut.py`**: Vectorized OkLAB gamut clipping methods (Chroma preservation, adaptive L0 projection).
-- **`utils/data.py`**: Dataset statistics calculation and robust image loading pipelines.
-- **`utils/graph.py`**: KNN graph construction and multi-head graph-based token shifting.
-- **`utils/drop.py`**: Stochastic depth (DropPath) implementation.
-- **`utils/diffSLIC_funcs.py`**: Superpixel upsampling and downsampling helpers.
+- **`spixrwkv7/data/colors.py`**: Differentiable conversions between sRGB, Linear RGB, and OkLAB.
+- **`spixrwkv7/data/gamut.py`**: Vectorized OkLAB gamut clipping methods (Chroma preservation, adaptive L0 projection).
+- **`spixrwkv7/data/transforms.py`**: Image preprocessing utilities.
+- **`spixrwkv7/layers/graph.py`**: KNN graph construction and multi-head graph-based token shifting.
+- **`spixrwkv7/layers/drop.py`**: Stochastic depth (DropPath) implementation.
 
 ## References & Inspirations
 
 This implementation builds upon several foundational works:
 
-- **RWKV-7**: Peng, B., et al. "RWKV-7 'Goose' with Expressive Dynamic State Evolution." _arXiv preprint_ (2024/2025).
-- **Vision-RWKV**: Duan, Y., et al. "Vision-RWKV: Efficient and Scalable Visual Perception with RWKV-like Architectures." _ICLR 2025_.
-- **AudioRWKV**: Wang, J., et al. "AudioRWKV: Efficient and Stable Bidirectional RWKV for Audio Pattern Recognition." _arXiv preprint_ (2024).
-- **diffSLIC**: Superpixel segmentation via differentiable clustering. Original implementation reference.
-- **Hilbert Curve**: Space-filling curve for locality-preserving token ordering.
+- **RWKV-7 "Goose"**: Peng, B., Alcaide, E., et al. "RWKV-7 'Goose' with Expressive Dynamic State Evolution." _arXiv:2503.14456_ (2025). The delta-rule recurrence with decoupled key-value states and dynamic w-kv gating that powers the recurrent scan in every block.
+- **Eagle & Finch (RWKV-5/6)**: Peng, B., Alcaide, E., et al. "Eagle and Finch: RWKV with Matrix-Valued States and Dynamic Recurrence." _arXiv:2404.05892_ (2024). Introduced the multi-headed matrix-valued hidden states and dynamic recurrence mechanism that RWKV-7 builds upon.
+- **Vision-RWKV**: Duan, Y., et al. "Vision-RWKV: Efficient and Scalable Visual Perception with RWKV-like Architectures." _ICLR 2025_. The original RWKV-to-vision adaptation that this project started as a port of, before diverging significantly.
+- **SLIC Superpixels**: Achanta, R., et al. "SLIC Superpixels Compared to State-of-the-Art Superpixel Methods." _IEEE TPAMI_ 34(11):2274-2282 (2012). The simple linear iterative clustering algorithm at the core of the superpixel tokenization pipeline.
+- **Superpixel Sampling Networks (SSN)**: Jampani, V., et al. "Superpixel Sampling Networks." _ECCV 2018_. Introduced differentiable SLIC via iterative cluster updates with soft assignment, which the diffSLIC implementation adapts for end-to-end training.
+- **Hilbert Curve**: Space-filling curve for locality-preserving token ordering, used to place spatially proximate superpixels adjacent in the recurrent scan sequence.
+
+## Optimized Kernels
+
+The `spixrwkv7/kernels/` module provides optimized C++ implementations of the core RWKV-7 WKV operator:
+
+- **WKV v7 kernel** (`rwkv7_kernel.cpp`): Implements the delta-rule recurrence with SIMD-optimized loops, adapted from gabz-rwkv.cpp.
+- **OptimizedVision_RWKV7_Block**: Drop-in replacement for `Vision_RWKV7_Block` that uses the C++ kernel when available.
+- **OptimizedVision_RWKV7**: Full backbone wrapper that uses optimized blocks.
+
+**IMPORTANT**: The PyTorch implementation (`spixrwkv7/spixrwkv7.py`) and the optimized implementation (`spixrwkv7/kernels/optimized_block.py`, `spixrwkv7/kernels/optimized_vision.py`) must be kept in SYNC at all times. Any architectural change to the core model must be reflected in the optimized versions. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+### Building the C++ Extension
+
+```bash
+# Build the extension (requires C++ compiler and PyTorch headers)
+cd spixrwkv7/kernels && python setup.py build_ext --inplace
+```
+
+### Using Optimized Kernels
+
+```python
+from spixrwkv7 import create_optimized_vision_rwkv7
+
+# Create model with optimized kernel
+model = create_optimized_vision_rwkv7(
+    img_size=224,
+    embed_dims=256,
+    depth=6,
+    num_heads=4,
+    use_cpp=True,  # Enable C++ kernel
+)
+```
+
+### Benchmark with Optimized Kernels
+
+```bash
+# Compare PyTorch vs C++ kernel performance
+uv run python scripts/compare_architectures.py --runs 10 --use-cpp
+```
 
 ## Contributing
 

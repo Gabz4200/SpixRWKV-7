@@ -33,7 +33,7 @@ if __name__ == "__main__":
 from datasets import load_dataset
 from torch.utils.data import DataLoader, IterableDataset
 
-from spixrwkv7 import create_vision_rwkv7
+from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
 
 # ---------------------------------------------------------------------------
@@ -206,7 +206,7 @@ class ADE20KSegModel(nn.Module):
 
     def __init__(self, config: dict, num_classes: int):
         super().__init__()
-        self.backbone = create_vision_rwkv7(
+        self.backbone = _create_model(
             img_size=config["img_size"],
             embed_dims=config["embed_dims"],
             num_heads=config["num_heads"],
@@ -217,6 +217,8 @@ class ADE20KSegModel(nn.Module):
             diff_slic_iters=config.get("diff_slic_iters", 1),
             compactness=config.get("compactness", 0.5),
             init_values=1e-5,
+            norm_layer="rmsnorm",
+            act_layer="swiglu",
         )
         self.seg_head = SegHead(config["embed_dims"], num_classes)
 
@@ -343,11 +345,11 @@ def main() -> None:
 
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size, num_workers=args.num_workers,
-        pin_memory=False,
+        pin_memory=True,
     )
     val_loader = DataLoader(
         val_ds, batch_size=args.batch_size, num_workers=args.num_workers,
-        pin_memory=False,
+        pin_memory=True,
     )
 
     # --- Model ---
@@ -366,6 +368,7 @@ def main() -> None:
 
     # --- Training ---
     epoch_times = []
+    epoch_losses = []
     for epoch in range(1, args.epochs + 1):
         model.train()
         epoch_loss = 0.0
@@ -404,7 +407,7 @@ def main() -> None:
         val_loss = 0.0
         val_acc = 0.0
         val_batches = 0
-        with torch.inference_mode():
+        with torch.no_grad():
             for inputs, targets in val_loader:
                 inputs, targets = inputs.to(device), targets.to(device)
                 logits = model(inputs)
@@ -423,6 +426,8 @@ def main() -> None:
         else:
             avg_loss = float("nan")
             avg_acc = 0.0
+
+        epoch_losses.append(avg_loss)
 
         if val_batches > 0:
             val_loss /= val_batches
@@ -445,7 +450,7 @@ def main() -> None:
     print("Done.")
     avg_epoch = sum(epoch_times) / len(epoch_times)
     print(f"  Avg epoch time: {avg_epoch:.0f}s")
-    print(f"  Loss trend: train={epoch_times[0] if epoch_times else 0:.1f} -> ...")
+    print(f"  Loss trend: train={epoch_losses[0] if epoch_losses else 0:.4f} -> ...")
     print("  - Decreasing to ~0 -> model CAN overfit (architecture passes)")
     print("  - Stagnant / NaN    -> architecture or training issue")
     print("=" * 72)

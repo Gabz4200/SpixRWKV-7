@@ -13,3 +13,5 @@ model:
   scatter_output: true
   diff_slic_iters: 5
   compactness: 0.5
+  norm_layer: rmsnorm
+  act_layer: swiglu

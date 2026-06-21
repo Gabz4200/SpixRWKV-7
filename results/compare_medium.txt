@@ -1,0 +1,197 @@
+Running on device: cpu
+Warmup runs: 2, Timed runs: 5
+Batch size: 1
+======================================================================
+
+======================================================================
+PART 1: MODEL SIZE COMPARISON
+======================================================================
+
+--- TINY Config ---
+  img_size: 64
+  embed_dims: 128
+  depth: 2
+  num_heads: 2
+  num_superpixels: 36
+  Vision RWKV-7 params: 0.64M
+  ViT params: 5.68M
+  Vision RWKV-7 peak memory: 0.02MB
+  ViT peak memory: 0.00MB
+
+  Benchmarking Vision RWKV-7...
+    Total: 156.50ms
+    diffSLIC (tokenizer): 19.69ms
+    Backbone (recurrent): 136.81ms
+  Benchmarking ViT...
+    Total: 13.99ms
+
+  Speed ratio (ViT/RWKV-7): 0.09x
+    ViT is 11.19x FASTER than Vision RWKV-7
+
+--- SMALL Config ---
+  img_size: 224
+  embed_dims: 256
+  depth: 6
+  num_heads: 4
+  num_superpixels: 144
+  Vision RWKV-7 params: 6.30M
+  ViT params: 22.05M
+  Vision RWKV-7 peak memory: 0.04MB
+  ViT peak memory: 0.00MB
+
+  Benchmarking Vision RWKV-7...
+    Total: 2285.21ms
+    diffSLIC (tokenizer): 313.02ms
+    Backbone (recurrent): 1972.19ms
+  Benchmarking ViT...
+    Total: 149.26ms
+
+  Speed ratio (ViT/RWKV-7): 0.07x
+    ViT is 15.31x FASTER than Vision RWKV-7
+
+--- MEDIUM Config ---
+  img_size: 512
+  embed_dims: 512
+  depth: 12
+  num_heads: 8
+  num_superpixels: 196
+  Vision RWKV-7 params: 45.60M
+  ViT params: 87.20M
+  Vision RWKV-7 peak memory: 0.06MB
+  ViT peak memory: 0.00MB
+
+  Benchmarking Vision RWKV-7...
+    Total: 8729.29ms
+    diffSLIC (tokenizer): 2915.03ms
+    Backbone (recurrent): 5814.27ms
+  Benchmarking ViT...
+    Total: 2874.53ms
+
+  Speed ratio (ViT/RWKV-7): 0.33x
+    ViT is 3.04x FASTER than Vision RWKV-7
+
+======================================================================
+PART 2: RESOLUTION SWEEP
+======================================================================
+
+======================================================================
+RESOLUTION SWEEP FOR SMALL MODEL
+======================================================================
+Model config: embed_dims=256, depth=6, num_heads=4
+Testing image sizes: [64, 128, 224]
+
+  --- Image size: 64x64 ---
+    Vision RWKV-7 params: 6.30M
+    ViT params: 21.98M
+    RWKV-7 peak memory: 0.04MB
+    ViT peak memory: 0.00MB
+    RWKV-7 Total: 1244.87ms
+    RWKV-7 diffSLIC: 37.90ms
+    RWKV-7 Backbone: 1206.97ms
+    ViT Total: 19.71ms
+    Speed ratio (ViT/RWKV-7): 0.02x
+
+  --- Image size: 128x128 ---
+    Vision RWKV-7 params: 6.30M
+    ViT params: 22.00M
+    RWKV-7 peak memory: 0.04MB
+    ViT peak memory: 0.00MB
+    RWKV-7 Total: 1290.87ms
+    RWKV-7 diffSLIC: 83.17ms
+    RWKV-7 Backbone: 1207.70ms
+    ViT Total: 45.68ms
+    Speed ratio (ViT/RWKV-7): 0.04x
+
+  --- Image size: 224x224 ---
+    Vision RWKV-7 params: 6.30M
+    ViT params: 22.05M
+    RWKV-7 peak memory: 0.04MB
+    ViT peak memory: 0.00MB
+    RWKV-7 Total: 1512.50ms
+    RWKV-7 diffSLIC: 220.52ms
+    RWKV-7 Backbone: 1291.98ms
+    ViT Total: 121.55ms
+    Speed ratio (ViT/RWKV-7): 0.08x
+
+  Resolution sweep results:
+  Img      RWKV-7       ViT          Speedup    Tokenizer %  Mem RWKV   Mem ViT   
+  --------------------------------------------------------------------------
+  64       1244.87      19.71        0.02      x 3.0          0.04       0.00      
+  128      1290.87      45.68        0.04      x 6.4          0.04       0.00      
+  224      1512.50      121.55       0.08      x 14.6         0.04       0.00      
+
+======================================================================
+FINAL SUMMARY
+======================================================================
+Size     Img    RWKV-7     ViT        Speedup 
+----------------------------------------------------------------------
+tiny     64     156.50     13.99      0.09    x
+small    224    2285.21    149.26     0.07    x
+medium   512    8729.29    2874.53    0.33    x
+
+======================================================================
+DIFFSLIC BREAKDOWN ANALYSIS
+======================================================================
+This shows what fraction of Vision RWKV-7 time is spent in diffSLIC.
+When diffSLIC is ported to optimized C++, the backbone speedup
+relative to ViT becomes more significant.
+
+Size     Tokenizer %  Backbone %   Backbone/Tokenizer
+----------------------------------------------------------------------
+tiny     12.6         87.4         6.95              x
+small    13.7         86.3         6.30              x
+medium   33.4         66.6         1.99              x
+
+======================================================================
+MEMORY COMPARISON
+======================================================================
+Size     RWKV-7 (MB)    ViT (MB)       Ratio     
+----------------------------------------------------------------------
+tiny     0.02           0.00           0.13      x
+small    0.04           0.00           0.08      x
+medium   0.06           0.00           0.05      x
+
+======================================================================
+ANALYSIS
+======================================================================
+Fastest Vision RWKV-7: tiny (156.50ms)
+
+Parameter efficiency (time per M params):
+  tiny    : RWKV-7=243.5921ms/M, ViT=2.4618ms/M
+  small   : RWKV-7=362.7953ms/M, ViT=6.7693ms/M
+  medium  : RWKV-7=191.4500ms/M, ViT=32.9640ms/M
+
+Key findings:
+  tiny: Backbone dominates (87% of time)
+  small: Backbone dominates (86% of time)
+  medium: Backbone dominates (67% of time)
+
+======================================================================
+WHY IS ViT FASTER ON CPU?
+======================================================================
+
+The SimpleViT uses nn.TransformerEncoderLayer which is a highly optimized
+PyTorch implementation with efficient matrix operations. Key factors:
+
+1. PyTorch Transformer uses optimized GEMM (General Matrix Multiply) kernels
+   that are heavily tuned for CPU.
+
+2. The Vision RWKV-7 backbone has a sequential recurrent loop (for t in range(N))
+   that cannot be vectorized like the parallel attention in ViT. Each timestep
+   requires its own forward pass through the recurrence.
+
+3. diffSLIC tokenization involves iterative clustering with softmax operations
+   over spatial dimensions - this is computationally expensive on CPU.
+
+4. The RWKV-7 recurrence uses small matrix operations (head_size=64) that
+   have poor cache efficiency compared to larger GEMM operations.
+
+5. On GPU, the comparison would favor RWKV-7 more because:
+   - The recurrent loop can run in parallel across sequence positions
+   - No quadratic attention memory overhead
+   - diffSLIC would still be a bottleneck but less severe
+
+The "parameter efficiency" metric (time per M params) shows ViT is ~100-400x
+more efficient on CPU because it uses optimized parallel operations, while
+RWKV-7 uses sequential recurrence that doesn't parallelize well on CPU.
+

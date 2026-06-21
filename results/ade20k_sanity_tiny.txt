@@ -1,0 +1,41 @@
+========================================================================
+ADE20K Sanity Overfit Test
+========================================================================
+  Model scale:     tiny
+  embed_dims:      128  (num_heads=2)
+  depth:           4
+  num_superpixels: 36
+  img_size:        64
+  num_train:       64
+  num_val:         32
+  batch_size:      4
+  lr:              0.0005
+  epochs:          3
+  device:          cpu
+========================================================================
+Discovering ADE20K classes from train split...
+'[SSL] record layer failure (_ssl.c:2580)' thrown while requesting GET https://huggingface.co/datasets/1aurent/ADE20K/resolve/bbf21e2662a83fa741b7daac9cfd5a074b1b1056/data/train-00006-of-00010.parquet
+Retrying in 1s [Retry 1/5].
+  Found 226 unique classes in 64 train samples
+  Unknown classes in val set: 181 
+
+  Model params: 1,269,653 (trainable: 1,269,653)
+  Seg head:      29,184  (226 classes x 128)
+
+/home/gabz/Projects/Visual_RWKV7_Pytorch/.venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py:752: UserWarning: 'pin_memory' argument is set as true but no accelerator is found, then device pinned memory won't be used.
+  super().__init__(loader)
+  E01 B005 | loss=5.4399 | acc=24.3% | grad_norm=2.43
+  E01 B010 | loss=5.4194 | acc=0.3% | grad_norm=0.31
+  E01 B015 | loss=5.4151 | acc=16.5% | grad_norm=0.61
+'[SSL] record layer failure (_ssl.c:2580)' thrown while requesting GET https://huggingface.co/datasets/1aurent/ADE20K/resolve/bbf21e2662a83fa741b7daac9cfd5a074b1b1056/data/train-00002-of-00010.parquet
+Retrying in 1s [Retry 1/5].
+'[SSL] record layer failure (_ssl.c:2580)' thrown while requesting GET https://huggingface.co/datasets/1aurent/ADE20K/resolve/bbf21e2662a83fa741b7daac9cfd5a074b1b1056/data/train-00007-of-00010.parquet
+Retrying in 1s [Retry 1/5].
+'[SSL] record layer failure (_ssl.c:2580)' thrown while requesting GET https://huggingface.co/datasets/1aurent/ADE20K/resolve/bbf21e2662a83fa741b7daac9cfd5a074b1b1056/data/train-00005-of-00010.parquet
+Retrying in 1s [Retry 1/5].
+'[SSL] record layer failure (_ssl.c:2580)' thrown while requesting GET https://huggingface.co/datasets/1aurent/ADE20K/resolve/bbf21e2662a83fa741b7daac9cfd5a074b1b1056/data/train-00000-of-00010.parquet
+Retrying in 1s [Retry 1/5].
+'[SSL] record layer failure (_ssl.c:2580)' thrown while requesting GET https://huggingface.co/datasets/1aurent/ADE20K/resolve/bbf21e2662a83fa741b7daac9cfd5a074b1b1056/data/train-00009-of-00010.parquet
+Retrying in 1s [Retry 1/5].
+'[SSL] record layer failure (_ssl.c:2580)' thrown while requesting GET https://huggingface.co/datasets/1aurent/ADE20K/resolve/bbf21e2662a83fa741b7daac9cfd5a074b1b1056/data/train-00006-of-00010.parquet
+Retrying in 1s [Retry 1/5].

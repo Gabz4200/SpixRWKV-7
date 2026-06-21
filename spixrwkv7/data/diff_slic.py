@@ -174,7 +174,8 @@ def compute_center_to_elem_assignment(
     tau: float = 0.01,
     candidate_radius: int = 1,
     stable: bool = False,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    return_unfold: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     r"""Compute center-to-elem assignment with a local attention."""
     b, c, h, w = clst_feats.shape
     neighbor_range = candidate_radius * 2 + 1
@@ -187,7 +188,10 @@ def compute_center_to_elem_assignment(
     unfold_elem_feats = unfold_elem_feats.reshape(b, c, n_candidate_pixels, h, w)
     similarities = torch.einsum("bcphw,bchw->bphw", (unfold_elem_feats, clst_feats))
     soft_assignment = _masked_softmax(similarities, tau, dim=1, stable=stable)
-    return soft_assignment, similarities
+    if return_unfold:
+        return soft_assignment, similarities, unfold_elem_feats
+    return soft_assignment, similarities, None
+
 
 
 def update_clst_feats(
@@ -199,18 +203,9 @@ def update_clst_feats(
     stable: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     r"""Update cluster features with a local attention."""
-    soft_assignment, similarities = compute_center_to_elem_assignment(
-        clst_feats, elem_feats, stride, tau, candidate_radius, stable
+    soft_assignment, similarities, unfold_elem_feats = compute_center_to_elem_assignment(
+        clst_feats, elem_feats, stride, tau, candidate_radius, stable, return_unfold=True
     )
-    b, c, h, w = clst_feats.shape
-    neighbor_range = candidate_radius * 2 + 1
-    kernel_size = (stride[0] * neighbor_range, stride[1] * neighbor_range)
-    padding = (stride[0] * candidate_radius, stride[1] * candidate_radius)
-    n_candidate_pixels = kernel_size[0] * kernel_size[1]
-    unfold_elem_feats = F.unfold(
-        elem_feats, kernel_size, padding=padding, stride=stride
-    )
-    unfold_elem_feats = unfold_elem_feats.reshape(b, c, n_candidate_pixels, h, w)
     new_clst_feats = torch.einsum(
         "bphw,bcphw->bchw", (soft_assignment, unfold_elem_feats)
     )
@@ -242,7 +237,23 @@ class DiffSLIC(nn.Module):
         candidate_radius: int = 1,
         normalize: bool = True,
         stable: bool = False,
+        use_cpp: bool = False,
+        hard_mode: bool = False,
     ) -> None:
+        """Initialize DiffSLIC.
+
+        Args:
+            n_spixels: target number of superpixels.
+            n_iter: EM iterations.
+            tau: softmax temperature (smaller → harder assignments).
+            candidate_radius: local candidate region radius.
+            normalize: L2-normalize features before similarity.
+            stable: numerically stable softmax (subtract max before exp).
+            use_cpp: use C++ AVX kernel (default True; fails fast if .so missing).
+            hard_mode: replace soft assignments with argmax at inference time
+                (non-differentiable; gradients stop through assignments).
+                Equivalent to seeds-revised hard SLIC for inference speed.
+        """
         super().__init__()
         self.n_spixels = n_spixels
         self.n_iter = n_iter
@@ -250,6 +261,19 @@ class DiffSLIC(nn.Module):
         self.candidate_radius = candidate_radius
         self.normalize = normalize
         self.stable = stable
+        self.hard_mode = hard_mode
+        self.use_cpp = use_cpp
+
+    @property
+    def _has_cpp(self) -> bool:
+        """Return True if the C++ backend is loaded and active."""
+        if not self.use_cpp:
+            return False
+        try:
+            from spixrwkv7.kernels.rwkv7_kernel import _C
+            return hasattr(_C, "diff_slic_update_clusters") and hasattr(_C, "diff_slic_assign_pixels")
+        except (ImportError, AttributeError):
+            return False
 
     def forward(
         self, x: torch.Tensor, clst_feats: Optional[torch.Tensor] = None, n_spixels: Optional[int] = None
@@ -283,20 +307,42 @@ class DiffSLIC(nn.Module):
         x = F.pad(x, (0, pad_x, 0, pad_y))
 
         s2p_assign = None
-        for _ in range(self.n_iter):
-            clst_feats, s2p_assign, _ = update_clst_feats(
-                x, clst_feats, stride, self.tau, self.candidate_radius
-            )
-            if self.normalize:
-                clst_feats = clst_feats / clst_feats.norm(dim=1, keepdim=True).clamp(min=1e-8)
 
-        p2s_assign, _ = compute_elem_to_center_assignment(
-            clst_feats, x, stride, self.tau, self.candidate_radius
-        )
+        if self.use_cpp:
+            from spixrwkv7.kernels.rwkv7_kernel import (
+                diff_slic_assign_pixels,
+                diff_slic_update_clusters,
+            )
+            for _ in range(self.n_iter):
+                clst_feats = diff_slic_update_clusters(
+                    x, clst_feats, stride, self.candidate_radius,
+                    self.tau, self.normalize,
+                )
+            p2s_assign = diff_slic_assign_pixels(
+                x, clst_feats, stride, self.candidate_radius, self.tau,
+            )
+        else:
+            for _ in range(self.n_iter):
+                clst_feats, s2p_assign, _ = update_clst_feats(
+                    x, clst_feats, stride, self.tau, self.candidate_radius
+                )
+                if self.normalize:
+                    clst_feats = clst_feats / clst_feats.norm(dim=1, keepdim=True).clamp(min=1e-8)
+            p2s_assign, _ = compute_elem_to_center_assignment(
+                clst_feats, x, stride, self.tau, self.candidate_radius
+            )
+
         if pad_y > 0:
             p2s_assign = p2s_assign[..., :-pad_y, :]
         if pad_x > 0:
             p2s_assign = p2s_assign[..., :-pad_x]
+
+        # Hard mode: argmax assignments (non-differentiable, inference-speed equivalent
+        # to seeds-revised hard SLIC). Gradient stops through assignment indices.
+        if self.hard_mode and not self.training:
+            hard_idx = p2s_assign.argmax(dim=1, keepdim=True)  # (B, 1, H, W)
+            p2s_assign = torch.zeros_like(p2s_assign).scatter_(1, hard_idx, 1.0)
+
         return clst_feats, p2s_assign, s2p_assign
 
     def extra_repr(self):

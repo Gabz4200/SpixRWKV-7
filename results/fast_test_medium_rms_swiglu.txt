@@ -1,0 +1,38 @@
+========================================================================
+  SpixRWKV-7 — Fast Convergence Test (single-batch overfit)
+========================================================================
+  Device         CPU
+  Batch size     4
+  Image size     64x64
+  Classes        10
+  Embed dims     128
+  Heads          2
+  Depth          2
+  Superpixels    36
+  Total params   773,661
+  Train params   773,661
+  Optimizer      AdamW (lr=0.0005, wd=0.0)
+  Max steps      50
+  Target acc     95%
+------------------------------------------------------------------------
+   Step      Loss     Acc  GradNorm  Time/step
+------------------------------------------------------------------------
+      1    2.1467   25.0%      7.81     529.9ms
+      5    1.7381   25.0%      4.47     505.2ms
+     10    1.5025   25.0%      1.92     467.2ms
+     15    1.4061   50.0%      0.99     472.2ms
+
+  >>> Target accuracy 95% reached at step 17.
+========================================================================
+  Summary
+========================================================================
+  Total time        8.0s
+  Steps run         17
+  Final loss        1.379409
+  Final accuracy    100.0%
+  Best accuracy     100.0%
+  Steps to 90%      17
+  Steps to 95%      17
+
+  RESULT: PASS — model overfits the batch (convergence OK)
+========================================================================

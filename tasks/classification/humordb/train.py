@@ -12,6 +12,7 @@ Usage:
 import argparse
 import json
 import math
+import random
 import sys
 import time
 from pathlib import Path
@@ -30,7 +31,7 @@ if __name__ == "__main__":
 from datasets import load_dataset
 from torch.utils.data import DataLoader, Dataset
 
-from spixrwkv7 import create_vision_rwkv7
+from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
 
 # ---------------------------------------------------------------------------
@@ -167,7 +168,7 @@ def make_loader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=False,
+        pin_memory=True,
         drop_last=False,
     )
 
@@ -375,6 +376,8 @@ def main() -> None:
 
     device = torch.device("cpu")
     torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
 
     # ------------------------------------------------------------------
     # Model
@@ -383,7 +386,7 @@ def main() -> None:
     print("  SpixRWKV-7 — HumorDB Funniness Regression")
     print("=" * 72)
 
-    backbone = create_vision_rwkv7(
+    backbone = _create_model(
         img_size=args.img_size,
         embed_dims=args.embed_dims,
         num_heads=args.num_heads,
@@ -398,6 +401,8 @@ def main() -> None:
         diff_slic_iters=args.diff_slic_iters,
         compactness=args.compactness,
         drop_path_rate=args.drop_path_rate,
+        norm_layer="rmsnorm",
+        act_layer="swiglu",
     ).to(device)
 
     backbone._init_weights()
@@ -477,7 +482,7 @@ def main() -> None:
             images = images.to(device)  # (B, 6, H, W)
             targets = targets.to(device)  # (B,)
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             preds = model(images)  # (B,)
 
             loss = F.mse_loss(preds, targets)

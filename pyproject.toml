@@ -1,6 +1,6 @@
 [project]
 name = "spixrwkv7"
-version = "0.2.0"
+version = "1.0.0"
 description = "SpixRWKV-7: Superpixel Graph RWKV-7 Vision Backbone"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -17,6 +17,7 @@ dependencies = [
     "torchvision>=0.27.0",
     "hilbertcurve==2.0.5",
     "datasets>=5.0.0",
+    "einops>=0.8.0",
 ]
 
 [[tool.uv.index]]
