@@ -1,6 +1,6 @@
 """Graph-based helpers: KNN graph construction and multi-head Q-Shift for superpixel grids."""
 
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 
@@ -23,12 +23,8 @@ def build_knn_graph(
     centroids = centroids.float()
     dists = torch.cdist(centroids, centroids)  # [B, N, N]
 
-    mask = (
-        torch.eye(N, dtype=torch.bool, device=centroids.device)
-        .unsqueeze(0)
-        .expand(B, -1, -1)
-    )
-    dists = dists.masked_fill(mask, float("inf"))
+    # In-place diagonal fill avoids allocating an [B, N, N] bool mask.
+    dists.diagonal(dim1=-2, dim2=-1).fill_(float("inf"))
 
     knn_dists, neighbors = torch.topk(
         dists, k, dim=2, largest=False
@@ -46,7 +42,6 @@ def q_shift_graph_multihead(
     head_dim: int = HEAD_SIZE,
     with_cls_token: bool = False,
     num_extra_tokens: int = 0,
-    **kwargs,
 ) -> torch.Tensor:
     """Graph-based Q-Shift for superpixel or irregular grids.
     Supports batched graphs [B, N, K] for data-dependent topologies.

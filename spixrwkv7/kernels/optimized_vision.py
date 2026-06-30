@@ -1,12 +1,11 @@
 """Optimized Vision_RWKV7 using C++ kernels."""
 
+from typing import Optional, Sequence
+
 import torch
 import torch.nn as nn
-from typing import Optional, Sequence, Tuple
 
-from spixrwkv7.models.spixrwkv7 import Vision_RWKV7, Vision_RWKV7_Block, ClassificationHead
-from spixrwkv7.layers.graph import HEAD_SIZE
-from spixrwkv7.layers.drop import DropPath
+from spixrwkv7.models.spixrwkv7 import Vision_RWKV7
 
 
 class OptimizedVision_RWKV7(Vision_RWKV7):

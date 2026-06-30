@@ -1,34 +1,62 @@
 # Vision-RWKV-7: RWKV-7 vision backbone with Superpixel Tokenization (diffSLIC),
 # Graph-Based Q-Shift, bidirectional scanning, gated fusion, and multi-scale output.
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import math
 from typing import Optional, Sequence, Tuple
 
-from hilbertcurve.hilbertcurve import HilbertCurve
-
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from spixrwkv7.data.diff_slic import DiffSLIC, spixel_upsampling
 from spixrwkv7.data.lnsnet import LNSNet, download_lnsnet_weights, lnsnet_assignment
-from spixrwkv7.layers.graph import build_knn_graph, q_shift_graph_multihead, HEAD_SIZE
 from spixrwkv7.layers.drop import DropPath
+from spixrwkv7.layers.graph import HEAD_SIZE, build_knn_graph, q_shift_graph_multihead
 
 TIME_MIX_EXTRA_DIM = 32
 _HILBERT_BITS = 13
-_HILBERT_CURVE = HilbertCurve(_HILBERT_BITS, 2)
+
+
+def _hilbert_xy_to_d(x: torch.Tensor, y: torch.Tensor, order: int) -> torch.Tensor:
+    """Vectorized 2-D Hilbert index — pure PyTorch, no Python loop over N.
+
+    Runs `order` loop iterations (one per bit level), each doing vectorized
+    ops over all (B, N) points simultaneously.  Replaces the original
+    per-point Python call loop which synced GPU→CPU for every centroid.
+
+    Args:
+        x, y: integer coordinate tensors, shape (B, N), values in [0, 2^order).
+        order: number of bits (curve resolution = 2^order).
+
+    Returns:
+        Hilbert distance tensor, shape (B, N), dtype long.
+    """
+    n = 1 << order          # total grid size per axis
+    x, y = x.clone(), y.clone()
+    d = torch.zeros_like(x, dtype=torch.long)
+    s = n >> 1              # start at n//2, halve each iteration
+    while s > 0:
+        rx = ((x & s) > 0).long()
+        ry = ((y & s) > 0).long()
+        d = d + s * s * ((3 * rx) ^ ry)
+        # rot(n, x, y, rx, ry): if ry==0 and rx==1, reflect; then if ry==0, swap.
+        flip = (ry == 0) & (rx == 1)
+        x = torch.where(flip, n - 1 - x, x)
+        y = torch.where(flip, n - 1 - y, y)
+        swap = (ry == 0)
+        x, y = torch.where(swap, y, x), torch.where(swap, x, y)
+        s >>= 1
+    return d
 
 
 def hilbert_sort_batched(coords_int: torch.Tensor) -> torch.Tensor:
-    """Sort token indices by 2-D Hilbert order for each batch item."""
-    B, N, _ = coords_int.shape
-    coords = coords_int.detach().to(device="cpu", dtype=torch.long).reshape(-1, 2)
-    distances = torch.tensor(
-        [_HILBERT_CURVE.distance_from_point(point.tolist()) for point in coords],
-        dtype=torch.long,
-        device=coords_int.device,
-    ).view(B, N)
-    return torch.argsort(distances, dim=1)
+    """Sort token indices by 2-D Hilbert order for each batch item.
+
+    Fully vectorized: no Python loop over tokens and no GPU→CPU sync.
+    """
+    x = coords_int[..., 0].long()
+    y = coords_int[..., 1].long()
+    distances = _hilbert_xy_to_d(x, y, _HILBERT_BITS)
+    return torch.argsort(distances, dim=-1)
 
 
 def remap_neighbors(
@@ -364,18 +392,13 @@ class SpatialMixer(nn.Module):
         self,
         xn: torch.Tensor,
         neighbors: torch.Tensor,
-        dists: Optional[torch.Tensor],
-        sigma: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Graph Q-shift followed by dynamic offset computation."""
-        assert sigma is not None, "SpatialMixer requires sigma (set by Vision_RWKV7_Block)"
         xs = q_shift_graph_multihead(
             xn,
             neighbors=neighbors,
-            dists=dists,
             head_dim=self.head_size,
             with_cls_token=self.with_cls_token,
-            sigma=sigma,
         )
         xx = xs - xn
         dm = self.dynamic_offset(xn, xx)
@@ -386,13 +409,12 @@ class SpatialMixer(nn.Module):
         x: torch.Tensor,
         xn: torch.Tensor,
         neighbors: torch.Tensor,
-        sigma: torch.Tensor,
         dists: Optional[torch.Tensor] = None,
         v_first_fwd: Optional[torch.Tensor] = None,
         v_first_bwd: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        xx, dm = self._spatial_prep(xn, neighbors, dists, sigma)
+        xx, dm = self._spatial_prep(xn, neighbors)
         x_gate = xn + xx * 0.5
 
         out_fwd, vf_fwd = self.scan(xn, xx, dm, "forward", v_first_fwd, mask=mask)
@@ -452,20 +474,16 @@ class ChannelMix(nn.Module):
         x: torch.Tensor,
         neighbors: torch.Tensor,
         dists: Optional[torch.Tensor] = None,
-        sigma: Optional[torch.Tensor] = None,
         head_dim: int = 64,
         with_cls_token: bool = False,
         h: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        assert sigma is not None, "ChannelMix requires sigma (set by Vision_RWKV7_Block)"
         xn = self.norm(h if h is not None else x)
         xs = q_shift_graph_multihead(
             xn,
             neighbors=neighbors,
-            dists=dists,
             head_dim=head_dim,
             with_cls_token=with_cls_token,
-            sigma=sigma,
         )
         xx = xs - xn
         xk = xn + xx * self.ffn_x_k
@@ -593,7 +611,9 @@ class Vision_RWKV7_Block(nn.Module):
             self.is_block_boundary = ((layer_id + 1) % layers_per_block == 0) or ((layer_id + 1) == n_layer)
 
         # Shared distance-softening scale for graph Q-shift.
-        self.sigma = nn.Parameter(torch.full((), 0.1))
+        # NOTE: sigma was removed — the q_shift_graph_multihead op currently uses
+        # uniform neighbor weighting.  Distance-weighted Q-shift (exp(-d/sigma²))
+        # is a meaningful future extension but is not yet implemented.
 
         norm_cls = get_norm_layer(norm_layer)
         self.ln1 = norm_cls(n_embd)
@@ -661,6 +681,9 @@ class Vision_RWKV7_Block(nn.Module):
         mask: Optional[torch.Tensor] = None,
         attnres_history: Optional[list[torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if self.layer_id == 0:
+            x = self.ln0(x)  # always applied for layer 0, regardless of attnres path
+
         if self.use_attnres and attnres_history is not None and len(attnres_history) > 0:
             h_attn = block_attn_res(
                 attnres_history, x,
@@ -669,12 +692,10 @@ class Vision_RWKV7_Block(nn.Module):
             h = self._apply_gate(x, h_attn, "attn")
             xn = self.ln1(h)
         else:
-            if self.layer_id == 0:
-                x = self.ln0(x)
             xn = self.ln1(x)
 
         x, vf_fwd, vf_bwd = self.spatial_mixer(
-            x, xn, neighbors, self.sigma, dists,
+            x, xn, neighbors, dists,
             v_first_fwd=v_first_fwd, v_first_bwd=v_first_bwd,
             mask=mask,
         )
@@ -691,14 +712,14 @@ class Vision_RWKV7_Block(nn.Module):
             h = self._apply_gate(x, h_mlp_attn, "mlp")
             x = self.channel_mix(
                 x, neighbors, dists,
-                sigma=self.sigma, head_dim=self.head_size,
+                head_dim=self.head_size,
                 with_cls_token=self.with_cls_token,
                 h=h,
             )
         else:
             x = self.channel_mix(
                 x, neighbors, dists,
-                sigma=self.sigma, head_dim=self.head_size,
+                head_dim=self.head_size,
                 with_cls_token=self.with_cls_token,
             )
 
@@ -745,6 +766,9 @@ class SuperpixelEmbedding(nn.Module):
             nn.ReLU(),
             nn.Linear(embed_dims, embed_dims),
         )
+        # Lazy coordinate grid cache: keyed by (H, W, device_str, dtype_str).
+        # Avoids re-running torch.meshgrid on every forward when image size is fixed.
+        self._coord_cache: dict = {}
 
     def forward(self, x: torch.Tensor, sp_map: torch.Tensor, K: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         B, C_in, H, W = x.shape
@@ -769,14 +793,18 @@ class SuperpixelEmbedding(nn.Module):
         x_conv = self.conv(x)
         pooled_conv = torch.einsum("bkhw,bchw->bkc", weights, x_conv)
 
-        # 4. Compute Centroids and Areas dynamically from the mask
+        # Compute centroids and areas dynamically from the mask
         areas = mask.sum(dim=(2, 3)) / (H * W)
         areas_norm = 2.0 * areas - 1.0
 
-        grid_y = torch.linspace(-1.0, 1.0, H, device=x.device, dtype=x.dtype)
-        grid_x = torch.linspace(-1.0, 1.0, W, device=x.device, dtype=x.dtype)
-        gy, gx = torch.meshgrid(grid_y, grid_x, indexing="ij")
-        coords = torch.stack([gx, gy], dim=-1)
+        # Lazy coord grid: recompute only when (H, W, device, dtype) change.
+        cache_key = (H, W, str(x.device), str(x.dtype))
+        if cache_key not in self._coord_cache:
+            grid_y = torch.linspace(-1.0, 1.0, H, device=x.device, dtype=x.dtype)
+            grid_x = torch.linspace(-1.0, 1.0, W, device=x.device, dtype=x.dtype)
+            gy, gx = torch.meshgrid(grid_y, grid_x, indexing="ij")
+            self._coord_cache[cache_key] = torch.stack([gx, gy], dim=-1)
+        coords = self._coord_cache[cache_key]
 
         centroids = torch.einsum("bkhw,hwc->bkc", weights, coords)
 
@@ -954,7 +982,7 @@ class SuperpixelTokenizer(nn.Module):
 
             assert self.lnsnet_model is not None
             cx, cy, f, probs = self.lnsnet_model(x_lnsnet)
-            
+
             # Recalculate grid shape K based on actual seed count generated
             S = H * W / n_sp
             sp_h = max(1, int(math.floor(math.sqrt(S) / (W / float(H)))))
@@ -964,7 +992,7 @@ class SuperpixelTokenizer(nn.Module):
             K = h_s * w_s
 
             p2s_assign = lnsnet_assignment(f, x_lnsnet, cx, cy) # shape (B, K, H, W)
-            
+
             if self.mode == "hard":
                 global_labels = p2s_assign.argmax(dim=1) # shape (B, H, W)
                 tokens, centroids = self.patch_embed(x, global_labels, K=K)
@@ -983,8 +1011,8 @@ class SuperpixelTokenizer(nn.Module):
                 global_soft_mask = F.one_hot(global_labels, num_classes=K).permute(0, 3, 1, 2).float()
                 tokens, centroids = self.patch_embed(x, global_soft_mask)
         elif self.spixel_backend in ("slic", "slico"):
-            import skimage.segmentation as seg
             import numpy as np
+            import skimage.segmentation as seg
             labels_list = []
             comp = self.compactness * 20.0
             slic_zero = (self.spixel_backend == "slico")
@@ -1339,11 +1367,15 @@ class Vision_RWKV7(nn.Module):
                     outs.append(feat)
 
         if self.use_attnres:
-            self.last_attnres_history = attnres_history
-            self.last_attnres_history_patches = [get_patches(t) for t in attnres_history] if attnres_history is not None else None
+            # Detach before pinning — this history is for visualization only.
+            # Keeping live computation-graph tensors on the model leaks memory
+            # across forward passes (prevents graph free after backward).
+            self.last_attnres_history = [t.detach() for t in attnres_history] if attnres_history else None
+            self.last_attnres_history_patches = [get_patches(t) for t in self.last_attnres_history] if self.last_attnres_history is not None else None
             self.last_project_fn = lambda patch_tokens: self._project_output(
                 patch_tokens, inv_order, batch_idx,
-                global_soft_mask, global_labels,
+                global_soft_mask.detach() if global_soft_mask is not None else None,
+                global_labels,
                 H, W, h_s, w_s,
             )
 

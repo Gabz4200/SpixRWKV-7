@@ -79,6 +79,9 @@ checkpoints/**/*
 *.bin
 *.gguf
 
+# C++ extension build artifacts (machine-arch-specific)
+*.so
+
 # Custom
 **/reviews
 

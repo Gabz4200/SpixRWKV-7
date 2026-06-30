@@ -13,11 +13,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from spixrwkv7.kernels.rwkv7_kernel import rwkv7_recurrent_scan as _cpp_recurrent_scan
 from spixrwkv7.layers.drop import DropPath
 from spixrwkv7.layers.graph import HEAD_SIZE, q_shift_graph_multihead
-from spixrwkv7.models.spixrwkv7 import TIME_MIX_EXTRA_DIM, ChannelMix, RecurrentScan, get_norm_layer, block_attn_res
-
-from spixrwkv7.kernels.rwkv7_kernel import rwkv7_recurrent_scan as _cpp_recurrent_scan
+from spixrwkv7.models.spixrwkv7 import (
+    TIME_MIX_EXTRA_DIM,
+    ChannelMix,
+    RecurrentScan,
+    block_attn_res,
+    get_norm_layer,
+)
 
 
 class OptimizedRecurrentScan(RecurrentScan):
@@ -64,9 +69,8 @@ class OptimizedRecurrentScan(RecurrentScan):
         ]
         x0, x1, x2, x3, x4, x5 = self.x.unbind(dim=0)
 
-        # Pre-allocate per-token result buffers
+        # Pre-allocate per-token result buffers (k excluded: C++ kernel uses kt directly)
         r_all = torch.empty(B, N, Hd, S, device=dev)
-        k_all = torch.empty(B, N, Hd, S, device=dev)
         v_all = torch.empty(B, N, Hd, S, device=dev)
         w_all = torch.empty(B, N, Hd, S, device=dev)
         a_all = torch.empty(B, N, Hd, S, device=dev)
@@ -116,7 +120,7 @@ class OptimizedRecurrentScan(RecurrentScan):
 
             # Store per-token features for C++ kernel
             r_all[:, t] = r_t.view(B, Hd, S)
-            k_all[:, t] = k_t.view(B, Hd, S)
+            # k_t not stored: kernel uses kt_t (= k*(1+(a-1)*k_a)), not raw k
             v_all[:, t] = v_t.view(B, Hd, S)
             w_all[:, t] = w_t.view(B, Hd, S)
             a_all[:, t] = a_t.view(B, Hd, S)
@@ -128,7 +132,7 @@ class OptimizedRecurrentScan(RecurrentScan):
 
         # Call C++ kernel for the full recurrent scan (returns state @ r, no bonus)
         # Guarded: _cpp_recurrent_scan is not None after the early return above
-        out_scan = _cpp_recurrent_scan(state, r_all, k_all, v_all, w_all, a_all, kk_all, kt_all, self.r_k, mask=mask_seq)  # type: ignore[union-attr]
+        out_scan = _cpp_recurrent_scan(state, r_all, v_all, w_all, a_all, kk_all, kt_all, mask=mask_seq)  # type: ignore[union-attr]
 
         # Apply group norm, bonus, gate, and output projection (post-processing)
         # Bonus is added AFTER GroupNorm to match original semantics
@@ -290,7 +294,6 @@ class ParallelRecurrentScan(RecurrentScan):
     ) -> torch.Tensor:
         """Parallel scan using Blelloch prefix scan."""
         batch_size, seq_len, Hd, S = r_all.shape
-        D = self.n_embd
 
         # Step 1 — build per-timestep (A, B) pairs:
         # shapes: (B, N, Hd, S, S)
@@ -463,8 +466,9 @@ class OptimizedVision_RWKV7_Block(nn.Module):
             layers_per_block = max(1, (n_layer + attnres_num_blocks - 1) // attnres_num_blocks)
             self.is_block_boundary = ((layer_id + 1) % layers_per_block == 0) or ((layer_id + 1) == n_layer)
 
-        # Shared distance-softening scale for graph Q-shift.
-        self.sigma = nn.Parameter(torch.full((), 0.1))
+        # NOTE: sigma (distance-softening scale) was removed — q_shift_graph_multihead
+        # currently uses uniform neighbor weighting.  Distance-weighted Q-shift is a
+        # meaningful future extension but is not yet implemented.
 
         norm_cls = get_norm_layer(norm_layer)
         self.ln1 = norm_cls(n_embd)
@@ -548,6 +552,9 @@ class OptimizedVision_RWKV7_Block(nn.Module):
         mask: Optional[torch.Tensor] = None,
         attnres_history: Optional[list[torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if self.layer_id == 0:
+            x = self.ln0(x)  # always applied for layer 0, regardless of attnres path
+
         if self.use_attnres and attnres_history is not None and len(attnres_history) > 0:
             h_attn = block_attn_res(
                 attnres_history, x,
@@ -556,12 +563,10 @@ class OptimizedVision_RWKV7_Block(nn.Module):
             h = self._apply_gate(x, h_attn, "attn")
             xn = self.ln1(h)
         else:
-            if self.layer_id == 0:
-                x = self.ln0(x)
             xn = self.ln1(x)
 
         x, vf_fwd, vf_bwd = self.spatial_mixer(
-            x, xn, neighbors, self.sigma, dists,
+            x, xn, neighbors, dists,
             v_first_fwd=v_first_fwd, v_first_bwd=v_first_bwd,
             mask=mask,
         )
@@ -578,14 +583,14 @@ class OptimizedVision_RWKV7_Block(nn.Module):
             h = self._apply_gate(x, h_mlp_attn, "mlp")
             x = self.channel_mix(
                 x, neighbors, dists,
-                sigma=self.sigma, head_dim=self.head_size,
+                head_dim=self.head_size,
                 with_cls_token=self.with_cls_token,
                 h=h,
             )
         else:
             x = self.channel_mix(
                 x, neighbors, dists,
-                sigma=self.sigma, head_dim=self.head_size,
+                head_dim=self.head_size,
                 with_cls_token=self.with_cls_token,
             )
 
@@ -641,17 +646,12 @@ class OptimizedSpatialMixer(nn.Module):
         self,
         xn: torch.Tensor,
         neighbors: torch.Tensor,
-        dists: Optional[torch.Tensor],
-        sigma: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        assert sigma is not None, "SpatialMixer requires sigma"
         xs = q_shift_graph_multihead(
             xn,
             neighbors=neighbors,
-            dists=dists,
             head_dim=self.head_size,
             with_cls_token=self.with_cls_token,
-            sigma=sigma,
         )
         xx = xs - xn
         dm = self.dynamic_offset(xn, xx)
@@ -662,13 +662,12 @@ class OptimizedSpatialMixer(nn.Module):
         x: torch.Tensor,
         xn: torch.Tensor,
         neighbors: torch.Tensor,
-        sigma: torch.Tensor,
-        dists: Optional[torch.Tensor] = None,
+        dists: Optional[torch.Tensor] = None,  # reserved for future distance-weighted Q-shift
         v_first_fwd: Optional[torch.Tensor] = None,
         v_first_bwd: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        xx, dm = self._spatial_prep(xn, neighbors, dists, sigma)
+        xx, dm = self._spatial_prep(xn, neighbors)
         x_gate = xn + xx * 0.5
 
         out_fwd, vf_fwd = self.scan(xn, xx, dm, "forward", v_first_fwd, mask=mask)

@@ -14,12 +14,11 @@ import torch.nn.functional as F
 
 from spixrwkv7.layers.graph import HEAD_SIZE, build_knn_graph
 from spixrwkv7.models.spixrwkv7 import (
-    get_norm_layer,
     Vision_RWKV7_Block,
+    get_norm_layer,
     hilbert_sort_batched,
     remap_neighbors,
 )
-
 
 # =====================================================================
 # VectorQuantizer — Discrete codebook with straight-through gradients
@@ -114,7 +113,6 @@ class VectorQuantizer(nn.Module):
                 self.ema_w.data.mul_(self.decay).add_(
                     encoded_sum * (1 - self.decay)
                 )
-                n = self.ema_cluster_size.sum()
                 smoothed_size = self.ema_cluster_size + self.epsilon
                 embed_normalized = self.ema_w / smoothed_size.unsqueeze(1)
                 self.embedding.data.copy_(embed_normalized)
@@ -671,7 +669,7 @@ class VQ_RWKV7(nn.Module):
         inv_order = out["inv_order"]
         batch_idx = out["batch_idx"]
         h_s, w_s = out["h_s"], out["w_s"]
-        self._last_q_loss = out["q_loss"]
+        self._last_q_loss = out["q_loss"]  # kept attached so it can participate in loss.backward()
 
         n_extra_front = self.register_tokens
         n_extra_back = 1 if self.with_cls_token else 0
@@ -747,7 +745,9 @@ class VQ_RWKV7(nn.Module):
                     outs.append(feat)
 
         if self.use_attnres:
-            self.last_attnres_history = attnres_history
+            # Detach before storing — the history is for post-hoc visualization only.
+            # Keeping live computation-graph tensors on self leaks memory across steps.
+            self.last_attnres_history = [t.detach() for t in attnres_history] if attnres_history else None
 
         return tuple(outs)
 

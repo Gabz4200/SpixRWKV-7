@@ -15,7 +15,6 @@ dependencies = [
     "pillow>=12.2.0",
     "matplotlib>=3.11.0",
     "torchvision>=0.27.0",
-    "hilbertcurve==2.0.5",
     "datasets>=5.0.0",
     "einops>=0.8.0",
 ]

@@ -3,35 +3,22 @@
 ========================================================================
   Device         CPU
   Batch size     4
-  Image size     64x64
+  Image size     512x512
   Classes        10
   Embed dims     128
   Heads          2
   Depth          2
   Superpixels    36
-  Total params   2,820,051
-  Train params   2,820,051
+  Total params   774,046
+  Train params   774,046
   Optimizer      AdamW (lr=0.0005, wd=0.0)
-  Max steps      50
+  Max steps      300
   Target acc     95%
 ------------------------------------------------------------------------
    Step      Loss     Acc  GradNorm  Time/step
 ------------------------------------------------------------------------
-      1    3.5552    0.0%     23.20     332.5ms
-      5   51.9188   75.0%     68.16     326.7ms
-     10    3.7671   75.0%      5.85     284.0ms
-
-  >>> Target accuracy 95% reached at step 14.
-========================================================================
-  Summary
-========================================================================
-  Total time        4.3s
-  Steps run         14
-  Final loss        2.867953
-  Final accuracy    100.0%
-  Best accuracy     100.0%
-  Steps to 90%      14
-  Steps to 95%      14
-
-  RESULT: PASS — model overfits the batch (convergence OK)
-========================================================================
+      1    1.8624   50.0%      9.09    7398.6ms
+      5    1.4358   50.0%      5.23    5016.1ms
+     10    1.2034   50.0%      2.17    4631.4ms
+     15    1.1176   50.0%      1.07    4396.1ms
+     20    1.0832   50.0%      0.80    4446.1ms

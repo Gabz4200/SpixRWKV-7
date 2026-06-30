@@ -9,11 +9,11 @@ Both kernels have an AVX512-optimized path that is dispatched at runtime
 via cpuid checks. On CPUs without AVX512, a generic fallback is used.
 """
 
+from typing import Optional, Tuple
+
 import torch
-from typing import Tuple, Optional
 
 from . import _C  # type: ignore[attr-defined]  # fails fast if .so not built
-
 
 # =====================================================================
 # RWKV-7 Recurrent Scan
@@ -22,37 +22,34 @@ from . import _C  # type: ignore[attr-defined]  # fails fast if .so not built
 def rwkv7_recurrent_scan(
     state: torch.Tensor,
     r: torch.Tensor,
-    k: torch.Tensor,
     v: torch.Tensor,
     w: torch.Tensor,
     a: torch.Tensor,
     kk: torch.Tensor,
     kt: torch.Tensor,
-    r_k: torch.Tensor,
     use_cpp: bool = True,
     mask: Optional[torch.Tensor] = None,
-    quantization: Optional[str] = None,
 ) -> torch.Tensor:
     """RWKV-7 recurrent scan — optimized C++ or PyTorch fallback.
 
     Performs the sequential delta-rule recurrence:
       state[t+1] = state[t] * w + state[t] @ (-kk*kk*a) + v @ kt^T
-      out[t] = state[t+1] @ r + bonus(r, kt, r_k) * v
+      out[t]     = state[t+1] @ r
 
-    Optimized: leverages rank-1 structure for O(S²) instead of O(S³).
+    The r_k bonus (r * kt * r_k * v) is NOT computed here; the caller
+    (OptimizedRecurrentScan) applies it after GroupNorm, matching the
+    original PyTorch semantics.
 
     Args:
-        state: (B, Hd, S, S) recurrent state, updated in-place
-        r: (B, N, Hd, S) receptance
-        k: (B, N, Hd, S) key (accepted for interface consistency, not used)
-        v: (B, N, Hd, S) value
-        w: (B, N, Hd, S) decay
-        a: (B, N, Hd, S) alpha (delta rule)
-        kk: (B, N, Hd, S) L2-normalized key
-        kt: (B, N, Hd, S) replacement key
-        r_k: (Hd, S) per-head bonus key
-        use_cpp: whether to use C++ kernel (default True)
-        quantization: optional quantization variant ("q4_0" or "q5_1")
+        state: (B, Hd, S, S) recurrent state
+        r:     (B, N, Hd, S) receptance
+        v:     (B, N, Hd, S) value
+        w:     (B, N, Hd, S) decay weight
+        a:     (B, N, Hd, S) alpha (delta rule)
+        kk:    (B, N, Hd, S) L2-normalized key
+        kt:    (B, N, Hd, S) replacement key
+        use_cpp: route through C++ kernel when True
+        mask:  optional (B, N) token validity mask
 
     Returns:
         out: (B, N, Hd, S) output tensor
@@ -66,25 +63,17 @@ def rwkv7_recurrent_scan(
             v = v * m
         if r.is_cuda:
             if hasattr(_C, "recurrent_scan_cuda"):
-                if quantization == "q4_0":
-                    out = _C.recurrent_scan_q4_0_cuda(state, r, k, v, w, a, kk, kt, r_k)
-                elif quantization == "q5_1":
-                    out = _C.recurrent_scan_q5_1_cuda(state, r, k, v, w, a, kk, kt, r_k)
-                else:
-                    out = _C.recurrent_scan_cuda(state, r, k, v, w, a, kk, kt, r_k)
+                # CUDA kernel: 7 args (state, r, v, w, a, kk, kt).
+                out = _C.recurrent_scan_cuda(state, r, v, w, a, kk, kt)
             else:
                 return _rwkv7_scan_pytorch(state, r, v, w, a, kk, kt, r_k, mask)
         else:
-            if quantization == "q4_0":
-                out = _C.rwkv7_recurrent_scan_q4_0(state, r, k, v, w, a, kk, kt, r_k)
-            elif quantization == "q5_1":
-                out = _C.rwkv7_recurrent_scan_q5_1(state, r, k, v, w, a, kk, kt, r_k)
-            else:
-                out = _C.rwkv7_recurrent_scan(state, r, k, v, w, a, kk, kt, r_k)
+            # CPU kernel: k not read, r_k bonus computed post-kernel in Python.
+            out = _C.rwkv7_recurrent_scan(state, r, v, w, a, kk, kt)
         if mask is not None:
             out = out * mask.unsqueeze(-1).unsqueeze(-1)
         return out
-    return _rwkv7_scan_pytorch(state, r, v, w, a, kk, kt, r_k, mask)
+    return _rwkv7_scan_pytorch(state, r, v, w, a, kk, kt, mask)
 
 
 def _rwkv7_scan_pytorch(
@@ -95,10 +84,12 @@ def _rwkv7_scan_pytorch(
     a: torch.Tensor,
     kk: torch.Tensor,
     kt: torch.Tensor,
-    r_k: torch.Tensor,
     mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Pure PyTorch fallback for RWKV-7 recurrent scan (for verification)."""
+    """Pure PyTorch fallback for RWKV-7 recurrent scan (for verification).
+
+    Does NOT compute the r_k bonus; that is added by the caller.
+    """
     _, N, _, _ = r.shape
     outputs = []
 

@@ -6,9 +6,10 @@ ensures they only execute on compatible CPUs.
 """
 
 import os
+
 import torch
 from setuptools import setup
-from torch.utils.cpp_extension import BuildExtension, CUDA_HOME, CUDAExtension, CppExtension
+from torch.utils.cpp_extension import CUDA_HOME, BuildExtension, CppExtension, CUDAExtension
 
 cpp_dir = os.path.join(os.path.dirname(__file__), "cpp")
 
@@ -18,8 +19,8 @@ cuda_available = torch.cuda.is_available() and (CUDA_HOME is not None)
 sources = [
     os.path.join(cpp_dir, "torch_binding.cpp"),
     os.path.join(cpp_dir, "rwkv7_kernel.cpp"),
-    os.path.join(cpp_dir, "rwkv7_kernel_avx2.cpp"),
-    os.path.join(cpp_dir, "rwkv7_kernel_avx512.cpp"),
+    # rwkv7_kernel_avx2.cpp removed: AVX2 paths are inlined in rwkv7_kernel.cpp
+    # rwkv7_kernel_avx512.cpp removed: never dispatched to, dead code
     os.path.join(cpp_dir, "diff_slic_kernel.cpp"),
     os.path.join(cpp_dir, "diff_slic_kernel_avx2.cpp"),
     os.path.join(cpp_dir, "diff_slic_kernel_avx512.cpp"),
@@ -40,8 +41,10 @@ if cuda_available:
 extra_compile_args = [
     "-O3",
     "-ffast-math",
-    "-fopenmp",
     "-march=native",
+    "-fopenmp",
+    "-fno-lto",  # override system Python's -flto=auto to avoid excessive compile time
+
     "-D_GLIBCXX_USE_CXX11_ABI=1",
     "-DGLOG_EXPORT_H",
     "-DGLOG_EXPORT=",

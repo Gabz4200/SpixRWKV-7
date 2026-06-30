@@ -82,13 +82,11 @@ __global__ void recurrent_scan_cuda_kernel(
 torch::Tensor recurrent_scan_cuda(
     torch::Tensor& state,
     const torch::Tensor& r,
-    const torch::Tensor& k,
     const torch::Tensor& v,
     const torch::Tensor& w,
     const torch::Tensor& a,
     const torch::Tensor& kk,
-    const torch::Tensor& kt,
-    const torch::Tensor& r_k)
+    const torch::Tensor& kt)
 {
     const auto B = r.size(0);
     const auto T = r.size(1); // N timesteps
@@ -124,34 +122,6 @@ torch::Tensor recurrent_scan_cuda(
     );
 
     return out;
-}
-
-torch::Tensor recurrent_scan_q4_0_cuda(
-    torch::Tensor& state,
-    const torch::Tensor& r,
-    const torch::Tensor& k,
-    const torch::Tensor& v,
-    const torch::Tensor& w,
-    const torch::Tensor& a,
-    const torch::Tensor& kk,
-    const torch::Tensor& kt,
-    const torch::Tensor& r_k)
-{
-    return recurrent_scan_cuda(state, r, k, v, w, a, kk, kt, r_k);
-}
-
-torch::Tensor recurrent_scan_q5_1_cuda(
-    torch::Tensor& state,
-    const torch::Tensor& r,
-    const torch::Tensor& k,
-    const torch::Tensor& v,
-    const torch::Tensor& w,
-    const torch::Tensor& a,
-    const torch::Tensor& kk,
-    const torch::Tensor& kt,
-    const torch::Tensor& r_k)
-{
-    return recurrent_scan_cuda(state, r, k, v, w, a, kk, kt, r_k);
 }
 
 } // namespace kernel
