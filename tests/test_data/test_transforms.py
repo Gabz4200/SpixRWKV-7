@@ -1,4 +1,4 @@
-"""Tests for dataload.py (Image loading, OkLAB conversion, and dataset statistics)."""
+"""Tests for transforms.py (Image loading, OkLAB conversion, and dataset statistics)."""
 
 import os
 from typing import Tuple
@@ -7,8 +7,6 @@ import pytest
 import torch
 from PIL import Image
 
-# Adjust this import path to match your project structure
-# (e.g., from VisualRWKV7.utils.dataload import ...)
 from spixrwkv7.data.transforms import (
     DEFAULT_OKLAB_MEAN,
     DEFAULT_OKLAB_STD,
