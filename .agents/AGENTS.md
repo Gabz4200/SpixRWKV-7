@@ -10,6 +10,7 @@ This file is for AI coding agents. It supplements `CONTRIBUTING.md` with rules s
 | Run all tests | `uv run pytest` |
 | Run one test file | `uv run pytest tests/test_models/test_model.py -v` |
 | Run demo | `uv run python scripts/demo.py` |
+| Build C++ kernel | `cd spixrwkv7/kernels && uv run python setup.py build_ext --inplace` |
 | Run training convergence test | `uv run python tasks/diagnostics/fast_test_training.py` |
 | Run full training diagnostics | `uv run python tasks/diagnostics/diagnose_training.py --all` |
 | Run with warnings | `uv run pytest -v -W all` |

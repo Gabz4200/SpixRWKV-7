@@ -25,7 +25,8 @@ The architecture merges the linear-complexity, constant-memory advantages of the
 + **Registers (DINOv2-style)**: Optional learnable register tokens prepended to the token sequence, allowing global context accumulation independent of superpixel representation. Enable with `register_tokens=N`.
 + **Dynamic Image Size Support**: `img_size` parameter in `load_image_to_tensor` for flexible resolution handling. `img_size=-1` (default) uses original resolution; positive values scale proportionally to match that height.
 
-+ **RMSNorm + SwiGLU Validation Complete**: Comprehensive evaluation of the new normalization/activation options shows stable convergence, deterministic behavior, and no NaN/Inf outputs. Full-batch overfit achieved in 17 steps with tiny config (64x64, 128 dims, 36 superpixels). Models under 3M params require structured shuffle (buffer=100) for stable training. See [RMSNorm + SwiGLU Results](#rmsnorm--swiglu-validation-results) for details.
+- **RMSNorm + SwiGLU Validation Complete**: Comprehensive evaluation of the new normalization/activation options shows stable convergence, deterministic behavior, and no NaN/Inf outputs. Full-batch overfit achieved in 17 steps with tiny config (64x64, 128 dims, 36 superpixels). Models under 3M params require structured shuffle (buffer=100) for stable training. See [RMSNorm + SwiGLU Results](#rmsnorm--swiglu-validation-results) for details.
+- **Deep Codebase Cleanup (commit e9caf86)**: Removed all dead code — 7 unused sigma params from all forward signatures, `hilbertcurve` dependency (replaced with native vectorized sort), Q4_0/Q5_1 quantization stubs, dead C++ kernel parameters (`k`, `r_k`, `n_extra_back`), dead `c_p` gather parameter, unused `S` state variables, and `pos_grid_size`/`pos_embed` in the backbone forward. Fixed 4 bugs (`r_k` `NameError`, `ln0` bypass never applied, dead `c_p` gather always masking, unused `S` variables shadowing). Cleaned C++ kernel signatures (state made `const`, removed stale args, `-fno-lto` build flag). Ruff-clean (0 errors), 126/126 tests pass. See [commit e9caf86](https://github.com/Gabz4200/SpixRWKV7/commit/e9caf86ea57587f007c57e5626444dfe60945c9b) for full diff.
 
 ## Key Features
 
@@ -578,24 +579,29 @@ Run the full test suite:
 uv run pytest -v
 ```
 
-**Expected output:** 103 tests pass.
+**Expected output:** 126 tests pass.
 
 ```text
-tests/test_models/test_model.py             ...............................
-tests/test_data/test_colors.py             ........................
-tests/test_data/test_transforms.py         ............
-tests/test_data/test_diff_slic.py          .............
-tests/test_regression.py         .......
-============================= 103 passed in 9-10s =============================
+tests/test_models/test_model.py             ...................................................... (86 tests)
+tests/test_data/test_colors.py             ......................... (25 tests)
+tests/test_data/test_transforms.py         .................... (20 tests)
+tests/test_data/test_diff_slic.py          .............. (14 tests)
+tests/test_regression.py         ....... (7 tests)
+============================= 126 passed in 12-13s =============================
 ```
 
 Tests are structured to verify behavior through **public interfaces** only, internal module reshuffling won't break them. Key test categories:
 
 - Block forward pass invariants (finiteness, determinism, shape correctness)
-- RWKV-7 architectural properties (decoupled keys, bonus term, vector-valued decay)
+- RWKV-7 architectural properties (decoupled keys, bonus term, vector-valued decay, state update)
 - Gradient flow (backpropagation to input)
-- Multi-scale output and CLS token behavior
+- Multi-scale output, CLS token, scatter output, and dynamic resolution
+- Alternative superpixel backends (grid, slic, slico, lnsnet)
+- Attention Residuals (AttnRes) modes and gates
+- VQ-VAE tokenization (VectorQuantizer, ConvolutionalVQVAE, VQ_RWKV7)
 - Superpixel embedding modes (hard/soft)
+- Color space correctness and gamut clipping stability
+- diffSLIC numerical stability and C++ backend
 
 ## Utilities
 

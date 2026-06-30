@@ -2,7 +2,9 @@
 
 SpixRWKV-7 is a recurrent vision backbone implemented in native PyTorch. It adapts the RWKV-7 language model recurrence (delta-rule linear attention with input-dependent decay) to 2D image understanding via **Superpixel Tokenization (diffSLIC)**, **Graph-Based Q-Shift** on KNN graphs, bidirectional scanning, gated fusion, **Hilbert-ordered token sequences**, and multi-scale feature output. The architecture supports interpolatable position embeddings, CLS token variants, and stochastic depth, with native support for the **OkLAB** perceptual color space.
 
-This repository contains the inference codebase: model definitions, training convergence tests, a demo script, and a test suite. Training pipelines and pretrained weights are maintained separately.
+This repository contains the inference codebase: model definitions, training convergence tests, a demo script, and a test suite (126 tests). Training pipelines and pretrained weights are maintained separately.
+
+The codebase has undergone a deep cleanup removing dead code, simplifying kernel interfaces, and fixing 4 bugs — see [commit history](https://github.com/Gabz4200/SpixRWKV7/commits/main) for details.
 
 ## Table of Contents
 
