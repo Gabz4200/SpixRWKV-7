@@ -12,16 +12,16 @@ When ported to optimized C++ kernel, the recurrent backbone becomes significantl
 faster relative to ViT's quadratic attention.
 """
 
-import time
 import argparse
-import tracemalloc
 import os
-from typing import Dict, Any, List
+import time
+import tracemalloc
+from pathlib import Path
+from typing import Any, Dict, List
 
 import torch
 import torch.nn as nn
 import yaml
-from pathlib import Path
 from einops import rearrange
 from einops.layers.torch import Rearrange
 
@@ -364,7 +364,7 @@ def run_size_comparison(
         print(f"  ViT peak memory: {vit_mem:.2f}MB")
 
         # Benchmark Vision RWKV-7 with component breakdown
-        print(f"\n  Benchmarking Vision RWKV-7...")
+        print("\n  Benchmarking Vision RWKV-7...")
         rwkv_metrics = benchmark_rwkv_components(
             rwkv_model, rwkv_input, warmup_runs, timed_runs, device
         )
@@ -373,7 +373,7 @@ def run_size_comparison(
         print(f"    Backbone (recurrent): {rwkv_metrics['backbone_time_ms']:.2f}ms")
 
         # Benchmark ViT
-        print(f"  Benchmarking ViT...")
+        print("  Benchmarking ViT...")
         vit_metrics = benchmark_model(
             vit_model, vit_input, warmup_runs, timed_runs, device
         )
@@ -504,7 +504,7 @@ def run_resolution_sweep(
             torch.cuda.empty_cache()
 
     # Print resolution sweep table
-    print(f"\n  Resolution sweep results:")
+    print("\n  Resolution sweep results:")
     print(f"  {'Img':<8} {'RWKV-7':<12} {'ViT':<12} {'Speedup':<10} {'Tokenizer %':<12} {'Mem RWKV':<10} {'Mem ViT':<10}")
     print(f"  {'-' * 74}")
     for r in results:
@@ -634,7 +634,7 @@ def main():
     for r in size_results:
         if r["rwkv_tokenizer"] > r["rwkv_backbone"]:
             print(f"  {r['size']}: diffSLIC dominates ({100*r['rwkv_tokenizer']/r['rwkv_time']:.0f}% of time)")
-            print(f"    -> C++ diffSLIC kernel would significantly improve RWKV-7 speed")
+            print("    -> C++ diffSLIC kernel would significantly improve RWKV-7 speed")
         else:
             print(f"  {r['size']}: Backbone dominates ({100*r['rwkv_backbone']/r['rwkv_time']:.0f}% of time)")
 

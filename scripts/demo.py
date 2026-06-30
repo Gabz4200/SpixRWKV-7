@@ -1,8 +1,8 @@
 """SpixRWKV-7 demo: verify backbone with dummy image input."""
 
 import argparse
-import random
 import os
+import random
 import sys
 from pathlib import Path
 
@@ -10,11 +10,14 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-import numpy as np
-import torch
-from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
-from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
-from spixrwkv7.data.transforms import preprocess_image_for_rwkv7
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+
+from spixrwkv7.data.transforms import preprocess_image_for_rwkv7  # noqa: E402
+from spixrwkv7.kernels.optimized_vision import (  # noqa: E402
+    create_optimized_vision_rwkv7 as _create_model,
+)
+from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7  # noqa: E402
 
 # Inspired by: https://arxiv.org/abs/2109.08203
 # Recommended: run 5-10 seeds, report mean ± std

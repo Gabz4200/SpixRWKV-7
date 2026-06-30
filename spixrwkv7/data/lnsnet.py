@@ -1,9 +1,10 @@
 import os
 import urllib.request
+
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
 
 class LNSNetEmbedder(nn.Module):
     def __init__(self, is_dilation=True):
@@ -163,12 +164,10 @@ def download_lnsnet_weights(check_path):
 
 def lnsnet_assignment(f, input_5ch, cx, cy, alpha=1.0):
     b, _, h, w = input_5ch.size()
-    p = input_5ch[:, 3:, :, :].view(b, 2, -1)
     cind = (cx * w + cy).long()
-    
-    c_p = torch.gather(p, 2, cind.unsqueeze(1).expand(-1, 2, -1))
+
     c_f = torch.gather(f, 2, cind.unsqueeze(1).expand(-1, f.shape[1], -1))
-    
+
     c_f_norm = torch.sum(c_f ** 2, dim=1, keepdim=True)
     f_norm = torch.sum(f ** 2, dim=1, keepdim=True)
     xy = torch.bmm(c_f.transpose(1, 2), f)
@@ -179,6 +178,6 @@ def lnsnet_assignment(f, input_5ch, cx, cy, alpha=1.0):
     dis = torch.pow((1 + dis), -(alpha + 1) / 2)
     dis = dis.permute(0, 2, 1).contiguous()
     dis = dis / (torch.sum(dis, dim=2, keepdim=True) + 1e-8)
-    
+
     dis = dis.permute(0, 2, 1).contiguous().view(b, -1, h, w)
     return dis

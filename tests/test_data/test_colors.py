@@ -1,26 +1,27 @@
 """Tests for colors.py and gamut.py (Oklab and sRGB gamut clipping)."""
 
-import torch
-import pytest
 from functools import partial
+
+import pytest
+import torch
 
 from spixrwkv7.data.colors import (
     _cbrt,
-    from_srgb_to_linear_rgb,
-    from_linear_rgb_to_srgb,
     from_linear_rgb_to_oklab,
+    from_linear_rgb_to_srgb,
     from_oklab_to_linear_rgb,
+    from_srgb_to_linear_rgb,
 )
 from spixrwkv7.data.gamut import (
-    _safe_halley_denom,
     _compute_max_saturation,
     _find_cusp,
     _in_gamut_mask,
+    _safe_halley_denom,
+    gamut_clip_adaptive_L0_0_5,
+    gamut_clip_adaptive_L0_L_cusp,
     gamut_clip_preserve_chroma,
     gamut_clip_project_to_0_5,
     gamut_clip_project_to_L_cusp,
-    gamut_clip_adaptive_L0_0_5,
-    gamut_clip_adaptive_L0_L_cusp,
 )
 
 # =========================================================================

@@ -97,7 +97,7 @@ def load_image_to_tensor(
     include_alpha: bool = False,
 ) -> torch.Tensor:
     """Load an image from disk, convert to tensor, resize, normalize, and convert color space.
-    
+
     Args:
         image_path: Path to image file.
         img_size: Target height (-1 for original size, otherwise scales proportionally).
@@ -180,7 +180,7 @@ def preprocess_image_for_rwkv7(
     include_alpha: bool = True,
 ) -> torch.Tensor:
     """Full preprocessing pipeline returning (1, 6, H, W) tensor: OkLAB + alpha + xy.
-    
+
     Args:
         image_path: Path to image file.
         img_size: Target height (-1 for original size, otherwise scales proportionally).

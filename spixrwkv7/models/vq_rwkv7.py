@@ -672,7 +672,6 @@ class VQ_RWKV7(nn.Module):
         self._last_q_loss = out["q_loss"]  # kept attached so it can participate in loss.backward()
 
         n_extra_front = self.register_tokens
-        n_extra_back = 1 if self.with_cls_token else 0
 
         # Register tokens — prepended (DINOv2-style)
         if self.register_tokens > 0:

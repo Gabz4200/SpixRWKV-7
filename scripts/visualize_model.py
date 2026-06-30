@@ -1,12 +1,17 @@
 """Visualize model internals: superpixels, KNN graph, conv features, Q-Shift mechanics."""
 
-import torch
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
+import torch.nn.functional as F
 from skimage import data, segmentation
 
-from spixrwkv7 import spixel_upsampling, build_knn_graph, q_shift_graph_multihead, create_vision_rwkv7
+from spixrwkv7 import (
+    build_knn_graph,
+    create_vision_rwkv7,
+    q_shift_graph_multihead,
+    spixel_upsampling,
+)
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
 
 

@@ -1,5 +1,6 @@
-import sys
 import contextlib
+import sys
+
 
 class TeeStream:
     """A stream that writes to multiple streams (e.g. stdout and a log file)."""

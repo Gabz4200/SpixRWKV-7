@@ -7,10 +7,10 @@ sections prefixed with [EXPERIMENT] for easy parsing.
 
 import argparse
 import math
+import os
 import random
 import sys
 import time
-import os
 from pathlib import Path
 
 import numpy as np
@@ -20,9 +20,11 @@ import torch.nn.functional as F
 _ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from spixrwkv7 import ClassificationHead
-from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
-from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
+from spixrwkv7 import ClassificationHead  # noqa: E402
+from spixrwkv7.kernels.optimized_vision import (  # noqa: E402
+    create_optimized_vision_rwkv7 as _create_model,
+)
+from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7  # noqa: E402
 
 
 def synth_batch(batch_size, num_classes, img_size, device):

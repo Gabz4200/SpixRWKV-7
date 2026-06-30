@@ -3,17 +3,17 @@
 import random
 import sys
 from pathlib import Path
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import numpy as np
-import torch
-import torch.nn as nn
-from PIL import Image
-from datasets import load_dataset
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+from datasets import load_dataset  # noqa: E402
+from PIL import Image  # noqa: E402
 
-from spixrwkv7 import create_vision_rwkv7
-from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
+from spixrwkv7 import create_vision_rwkv7  # noqa: E402
+from spixrwkv7.data.transforms import prepare_balanced_superpixel_features  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -102,7 +102,7 @@ with torch.no_grad():
                   f"has_inf={torch.isinf(o).any().item()}, "
                   f"range=[{o.min():.4f}, {o.max():.4f}]")
         print("\nNo NaN detected in forward pass.")
-    except Exception as e:
+    except Exception:
         import traceback
         traceback.print_exc()
 

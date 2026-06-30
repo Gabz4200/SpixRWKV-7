@@ -3,15 +3,15 @@
 
 import argparse
 
-import torch
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from PIL import Image
+from skimage.segmentation import mark_boundaries
 
 from spixrwkv7 import create_vision_rwkv7
-from spixrwkv7.data.transforms import preprocess_image_for_rwkv7
 from spixrwkv7.data.diff_slic import spixel_upsampling
-from skimage.segmentation import mark_boundaries
+from spixrwkv7.data.transforms import preprocess_image_for_rwkv7
 
 
 def main():

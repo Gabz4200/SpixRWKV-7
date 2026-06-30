@@ -9,8 +9,8 @@ detailed explanations and visualizations.
 """
 
 import torch
-from spixrwkv7.data.colors import _cbrt, from_linear_rgb_to_oklab, from_oklab_to_linear_rgb
 
+from spixrwkv7.data.colors import _cbrt, from_linear_rgb_to_oklab, from_oklab_to_linear_rgb
 
 # ---------------------------------------------------------------------------
 # Internal helpers

@@ -1,10 +1,10 @@
 """Differentiable SLIC superpixel segmentation and helper functions."""
 
+import math
 from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
-import math
 import torch.nn.functional as F
 
 # =====================================================================

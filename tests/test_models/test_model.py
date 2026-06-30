@@ -1,6 +1,8 @@
-from typing import TypedDict, Optional, Sequence, NotRequired
+from typing import NotRequired, Optional, Sequence, TypedDict
+
 import torch
 import torch.nn.functional as F
+
 from spixrwkv7.models.spixrwkv7 import (
     SuperpixelEmbedding,
     Vision_RWKV7,
@@ -8,12 +10,11 @@ from spixrwkv7.models.spixrwkv7 import (
     create_vision_rwkv7,
 )
 from spixrwkv7.models.vq_rwkv7 import (
-    VectorQuantizer,
-    ConvolutionalVQVAE,
     VQ_RWKV7,
+    ConvolutionalVQVAE,
+    VectorQuantizer,
     create_vq_rwkv7,
 )
-
 
 # =====================================================================
 # Helper Functions
@@ -578,18 +579,18 @@ def test_dynamic_resolution_spixel_size():
         depth=1,
         spixel_size=16,
     )
-    
+
     # 1. 64x64 input -> (64*64)/(16*16) = 16 superpixels (4x4 grid)
     x1 = torch.randn(1, 6, 64, 64)
     outs1 = model(x1)
     # Default is scatter_output=False, so output is at grid resolution
     assert outs1[0].shape == (1, 64, 4, 4)
-    
+
     # 2. 128x128 input -> (128*128)/(16*16) = 64 superpixels (8x8 grid)
     x2 = torch.randn(1, 6, 128, 128)
     outs2 = model(x2)
     assert outs2[0].shape == (1, 64, 8, 8)
-    
+
     # 3. Non-square 64x128 -> (64*128)/(16*16) = 32 superpixels (4x8 grid)
     x3 = torch.randn(1, 6, 64, 128)
     outs3 = model(x3)
@@ -620,24 +621,23 @@ def test_forward_num_superpixels_override():
         depth=1,
         num_superpixels=16,
     )
-    
+
     # Override to 36 superpixels (6x6)
     x = torch.randn(1, 6, 64, 64)
     outs = model(x, num_superpixels=36)
     assert outs[0].shape == (1, 64, 6, 6)
-    # We can't easily check the internal K without hooks, but if it doesn't crash 
-    # and produces the right output shape, the interpolation and graph building 
+    # We can't easily check the internal K without hooks, but if it doesn't crash
+    # and produces the right output shape, the interpolation and graph building
     # worked for the new K.
 
 
 def test_parallel_recurrent_scan_equivalence():
     """Verify that ParallelRecurrentScan output matches RecurrentScan and OptimizedRecurrentScan."""
-    from spixrwkv7.kernels.optimized_block import ParallelRecurrentScan, OptimizedRecurrentScan
+    from spixrwkv7.kernels.optimized_block import OptimizedRecurrentScan, ParallelRecurrentScan
     from spixrwkv7.models.spixrwkv7 import RecurrentScan
 
     B, N, D = 2, 8, 128
     Hd = 2
-    S = 64
     dev = "cpu"
 
     torch.manual_seed(42)
@@ -669,8 +669,8 @@ def test_parallel_recurrent_scan_equivalence():
     assert torch.allclose(out_parallel, out_opt, rtol=1e-3, atol=1e-4)
 def test_rmsnorm_swiglu_and_activation_options():
     """Verify that backbone can be initialized and run with RMSNorm and SwiGLU / other activations."""
-    from spixrwkv7.models.spixrwkv7 import create_vision_rwkv7
     from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7
+    from spixrwkv7.models.spixrwkv7 import create_vision_rwkv7
 
     device = "cpu"
     B, C, H, W = 2, 6, 64, 64
@@ -699,11 +699,11 @@ def test_rmsnorm_swiglu_and_activation_options():
 
 def test_sequence_masking_in_scans():
     """Verify that sequence masking works in the recurrent scan operations."""
+    from spixrwkv7.kernels.optimized_block import OptimizedRecurrentScan, ParallelRecurrentScan
     from spixrwkv7.models.spixrwkv7 import RecurrentScan
-    from spixrwkv7.kernels.optimized_block import ParallelRecurrentScan, OptimizedRecurrentScan
 
     B, N, D = 2, 8, 128
-    Hd, S = 2, 64
+    Hd = 2
     dev = "cpu"
 
     # Setup model and copy weights
@@ -748,7 +748,7 @@ def test_sequence_masking_backbone():
 
     # Create backbone
     model = create_vision_rwkv7(img_size=64, embed_dims=128, depth=2, num_heads=2, scatter_output=True).to(device)
-    
+
     # Since token ordering is Hilbert-sorted, we pass a mask of the same size as the number of superpixels
     # Let's say we have 196 superpixels. Let's mask some of them out.
     mask = torch.ones(B, 196, device=device)
@@ -763,7 +763,7 @@ def test_sequence_masking_backbone():
 
 def test_alternative_superpixel_backends():
     """Verify that alternative superpixel backends work correctly."""
-    from spixrwkv7 import create_vision_rwkv7, create_optimized_vision_rwkv7
+    from spixrwkv7 import create_optimized_vision_rwkv7, create_vision_rwkv7
 
     device = "cpu"
     B, C, H, W = 2, 6, 32, 32
@@ -814,7 +814,7 @@ def test_alternative_superpixel_backends():
 
 def test_attention_residuals():
     """Verify that Attention Residuals (AttnRes) works correctly for all modes and gates."""
-    from spixrwkv7 import create_vision_rwkv7, create_optimized_vision_rwkv7, ClassificationHead
+    from spixrwkv7 import ClassificationHead, create_optimized_vision_rwkv7, create_vision_rwkv7
 
     device = "cpu"
     B, C, H, W = 2, 6, 32, 32

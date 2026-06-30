@@ -10,13 +10,13 @@ Usage:
 """
 
 import argparse
-from typing import Optional
 import json
 import math
 import random
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -32,9 +32,9 @@ if __name__ == "__main__":
 from datasets import load_dataset
 from torch.utils.data import DataLoader, Dataset
 
+from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
 from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
-from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
 
 # ---------------------------------------------------------------------------
 # Checkpoint directory

@@ -7,6 +7,7 @@ from typing import Optional, Sequence, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from spixrwkv7.data.diff_slic import DiffSLIC, spixel_upsampling
 from spixrwkv7.data.lnsnet import LNSNet, download_lnsnet_weights, lnsnet_assignment
 from spixrwkv7.layers.drop import DropPath

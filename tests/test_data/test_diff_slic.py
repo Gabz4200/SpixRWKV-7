@@ -1,12 +1,13 @@
 """Complete test and debug of diffSLIC to ensure it works on any image."""
 
-import torch
-import pytest
-import torch.nn.functional as F
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import pytest
+import torch
+import torch.nn.functional as F
 from PIL import Image
-from spixrwkv7 import DiffSLIC, spixel_upsampling, spixel_downsampling
+
+from spixrwkv7 import DiffSLIC, spixel_downsampling, spixel_upsampling
 
 
 def _run_diffslic_on_multiple_images():

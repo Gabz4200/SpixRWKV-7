@@ -66,7 +66,7 @@ def rwkv7_recurrent_scan(
                 # CUDA kernel: 7 args (state, r, v, w, a, kk, kt).
                 out = _C.recurrent_scan_cuda(state, r, v, w, a, kk, kt)
             else:
-                return _rwkv7_scan_pytorch(state, r, v, w, a, kk, kt, r_k, mask)
+                return _rwkv7_scan_pytorch(state, r, v, w, a, kk, kt, mask)
         else:
             # CPU kernel: k not read, r_k bonus computed post-kernel in Python.
             out = _C.rwkv7_recurrent_scan(state, r, v, w, a, kk, kt)

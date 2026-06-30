@@ -1,24 +1,25 @@
 """Tests for dataload.py (Image loading, OkLAB conversion, and dataset statistics)."""
 
-import torch
-import pytest
 import os
-from PIL import Image
 from typing import Tuple
+
+import pytest
+import torch
+from PIL import Image
 
 # Adjust this import path to match your project structure
 # (e.g., from VisualRWKV7.utils.dataload import ...)
 from spixrwkv7.data.transforms import (
-    IMAGENET_RGB_MEAN,
-    IMAGENET_RGB_STD,
     DEFAULT_OKLAB_MEAN,
     DEFAULT_OKLAB_STD,
+    IMAGENET_RGB_MEAN,
+    IMAGENET_RGB_STD,
     _convert_srgb_to_oklab,
+    add_spatial_coordinates,
     calculate_dataset_mean_std,
     load_image_to_tensor,
-    add_spatial_coordinates,
-    preprocess_image_for_rwkv7,
     prepare_balanced_superpixel_features,
+    preprocess_image_for_rwkv7,
     revert_balanced_superpixel_features,
 )
 
@@ -334,12 +335,12 @@ def test_revert_balanced_superpixel_features_roundtrip():
     # Alpha is not balanced — passed through as-is
     x = torch.zeros(B, 1, H, W)
     y = torch.zeros(B, 1, H, W)
-    
+
     balanced = torch.cat([L_bal, a_bal, b_bal, alpha, x, y], dim=1)
-    
+
     # 2. Revert
     oklab_rev, alpha_rev = revert_balanced_superpixel_features(balanced, chroma_scale=chroma_scale)
-    
+
     # 3. Assertions
     assert torch.allclose(oklab_rev[:, 0:1], L, atol=1e-6)
     assert torch.allclose(oklab_rev[:, 1:2], a, atol=1e-6)
@@ -352,10 +353,10 @@ def test_prepare_balanced_superpixel_features_integration():
     B, H, W = 1, 16, 16
     srgb = torch.rand(B, 3, H, W)
     alpha = torch.rand(B, 1, H, W)
-    
+
     balanced = prepare_balanced_superpixel_features(srgb, alpha=alpha)
     assert balanced.shape == (B, 6, H, W)
-    
+
     # Check if L_bal is in [-1, 1]
     assert (balanced[:, 0] >= -1.0001).all() and (balanced[:, 0] <= 1.0001).all()
     # Check if alpha_bal is in [-1, 1]
