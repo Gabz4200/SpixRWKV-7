@@ -1,6 +1,7 @@
 """SpixRWKV-7: Superpixel Graph RWKV-7 Vision Backbone."""
 
 from spixrwkv7.data.diff_slic import DiffSLIC, spixel_downsampling, spixel_upsampling
+from spixrwkv7.jit import maybe_compile
 from spixrwkv7.kernels import (
     HAS_CPP_KERNEL,
     OptimizedVision_RWKV7,
@@ -32,6 +33,7 @@ __all__ = [
     "DropPath",
     "HAS_CPP_KERNEL",
     "HEAD_SIZE",
+    "maybe_compile",
     "OptimizedVision_RWKV7",
     "OptimizedVision_RWKV7_Block",
     "RecurrentScan",

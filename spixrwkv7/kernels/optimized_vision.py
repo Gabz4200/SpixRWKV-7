@@ -5,6 +5,7 @@ from typing import Optional, Sequence
 import torch
 import torch.nn as nn
 
+from spixrwkv7.jit import maybe_compile
 from spixrwkv7.models.spixrwkv7 import Vision_RWKV7
 
 
@@ -158,9 +159,10 @@ def create_optimized_vision_rwkv7(
     attnres_gate_type: str = "bias",
     attnres_num_blocks: int = 8,
     attnres_recency_bias_init: float = 10.0,
-) -> OptimizedVision_RWKV7:
+    use_jit: bool = False,
+) -> torch.nn.Module:
     """Create optimized Vision_RWKV7 with 6-channel input."""
-    return OptimizedVision_RWKV7(
+    _model: torch.nn.Module = OptimizedVision_RWKV7(
         img_size=img_size,
         in_chans=6,
         embed_dims=embed_dims,
@@ -189,3 +191,4 @@ def create_optimized_vision_rwkv7(
         attnres_num_blocks=attnres_num_blocks,
         attnres_recency_bias_init=attnres_recency_bias_init,
     )
+    return maybe_compile(_model, use_jit=use_jit)

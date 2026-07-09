@@ -782,14 +782,17 @@ def create_vq_rwkv7(
     attnres_gate_type: str = "bias",
     attnres_num_blocks: int = 8,
     attnres_recency_bias_init: float = 10.0,
-) -> VQ_RWKV7:
+    use_jit: bool = False,
+) -> torch.nn.Module:
     """Create a VQ_RWKV7 model enforced to 6-channel input.
 
-    This is the standard entry point for this backbone.  `in_chans=6`
+    This is the standard entry point for this backbone.  ``in_chans=6``
     is enforced here; the class itself accepts arbitrary ``in_chans``
     for flexibility.
     """
-    return VQ_RWKV7(
+    from spixrwkv7.jit import maybe_compile
+
+    _model: torch.nn.Module = VQ_RWKV7(
         img_size=img_size,
         in_chans=6,
         embed_dims=embed_dims,
@@ -817,3 +820,4 @@ def create_vq_rwkv7(
         attnres_num_blocks=attnres_num_blocks,
         attnres_recency_bias_init=attnres_recency_bias_init,
     )
+    return maybe_compile(_model, use_jit=use_jit)

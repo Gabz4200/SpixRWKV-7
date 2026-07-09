@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--act-layer", type=str, default="swiglu")
     parser.add_argument("--spixel-backend", type=str, default="diff_slic", choices=["diff_slic", "grid", "slic", "slico", "lnsnet"])
     parser.add_argument("--use-attnres", action="store_true", help="Enable Attention Residuals")
+    parser.add_argument("--use-jit", action="store_true", help="Enable torch.compile JIT")
     parser.add_argument("--model-type", choices=["spix", "vq"], default="spix",
                         help="Backbone type (default: spix)")
     parser.add_argument("--codebook-size", type=int, default=1024,
@@ -75,6 +76,7 @@ def main():
                 norm_layer=args.norm_layer,
                 act_layer=args.act_layer,
                 use_attnres=args.use_attnres,
+                use_jit=args.use_jit,
             )
         else:
             model = _create_model(
@@ -92,15 +94,11 @@ def main():
                 act_layer=args.act_layer,
                 spixel_backend=args.spixel_backend,
                 use_attnres=args.use_attnres,
+                use_jit=args.use_jit,
             )
 
         # Model created on CPU, then moved to device (standard PyTorch pattern)
         callable_model = model.eval().to(TORCH_DEVICE)
-
-        if TORCH_DEVICE == "cuda":
-            callable_model = torch.compile(
-                callable_model
-            )  # On CPU this actually makes it slower, but on CUDA it can be much faster after the initial warmup.
 
         with torch.no_grad():
             for seed in seeds:
