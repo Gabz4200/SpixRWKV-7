@@ -43,6 +43,7 @@ extra_compile_args = [
     "-ffast-math",
     "-march=native",
     "-fopenmp",
+    "-mkl=parallel",
     "-fno-lto",  # override system Python's -flto=auto to avoid excessive compile time
 
     "-D_GLIBCXX_USE_CXX11_ABI=1",
@@ -64,7 +65,8 @@ if cuda_available:
             extra_compile_args={
                 "cxx": extra_compile_args,
                 "nvcc": ["-O3", "--use_fast_math", "-DWT_CUDA"]
-            }
+            },
+            extra_link_args=["-mkl=parallel"],
         )
     )
 else:
@@ -73,6 +75,7 @@ else:
             "spixrwkv7.kernels._C",
             sources=sources,
             extra_compile_args=extra_compile_args,
+            extra_link_args=["-mkl=parallel"],
         )
     )
 
