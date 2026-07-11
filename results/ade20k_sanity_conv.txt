@@ -1,0 +1,18 @@
+========================================================================
+ADE20K Sanity Overfit Test
+========================================================================
+  Model scale:     tiny
+  embed_dims:      128  (num_heads=2)
+  depth:           4
+  num_superpixels: 36
+  img_size:        64
+  num_train:       4
+  num_val:         2
+  batch_size:      1
+  lr:              0.0005
+  epochs:          1
+  device:          cpu
+========================================================================
+Discovering ADE20K classes from train split...
+'The read operation timed out' thrown while requesting GET https://huggingface.co/datasets/1aurent/ADE20K/resolve/bbf21e2662a83fa741b7daac9cfd5a074b1b1056/data/train-00004-of-00010.parquet
+Retrying in 1s [Retry 1/5].

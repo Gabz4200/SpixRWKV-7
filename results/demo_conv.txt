@@ -1,90 +1,90 @@
 
 === Testing seed 3407 ===
-Input:  (1, 6, 64, 53)
+Input:  (1, 6, 64, 64)
 Output levels:  1
-  level 0: (1, 128, 64, 53)
+  level 0: (1, 128, 16, 16)
 
-Total params: 0.77M
+Total params: 1.02M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 42 ===
-Input:  (1, 6, 64, 53)
+Input:  (1, 6, 64, 64)
 Output levels:  1
-  level 0: (1, 128, 64, 53)
+  level 0: (1, 128, 16, 16)
 
-Total params: 0.77M
+Total params: 1.02M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 123 ===
-Input:  (1, 6, 64, 53)
+Input:  (1, 6, 64, 64)
 Output levels:  1
-  level 0: (1, 128, 64, 53)
+  level 0: (1, 128, 16, 16)
 
-Total params: 0.77M
+Total params: 1.02M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 456 ===
-Input:  (1, 6, 64, 53)
+Input:  (1, 6, 64, 64)
 Output levels:  1
-  level 0: (1, 128, 64, 53)
+  level 0: (1, 128, 16, 16)
 
-Total params: 0.77M
+Total params: 1.02M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 789 ===
-Input:  (1, 6, 64, 53)
+Input:  (1, 6, 64, 64)
 Output levels:  1
-  level 0: (1, 128, 64, 53)
+  level 0: (1, 128, 16, 16)
 
-Total params: 0.77M
+Total params: 1.02M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 1000 ===
-Input:  (1, 6, 64, 53)
+Input:  (1, 6, 64, 64)
 Output levels:  1
-  level 0: (1, 128, 64, 53)
+  level 0: (1, 128, 16, 16)
 
-Total params: 0.77M
+Total params: 1.02M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 2000 ===
-Input:  (1, 6, 64, 53)
+Input:  (1, 6, 64, 64)
 Output levels:  1
-  level 0: (1, 128, 64, 53)
+  level 0: (1, 128, 16, 16)
 
-Total params: 0.77M
+Total params: 1.02M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 3000 ===
-Input:  (1, 6, 64, 53)
+Input:  (1, 6, 64, 64)
 Output levels:  1
-  level 0: (1, 128, 64, 53)
+  level 0: (1, 128, 16, 16)
 
-Total params: 0.77M
+Total params: 1.02M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 4000 ===
-Input:  (1, 6, 64, 53)
+Input:  (1, 6, 64, 64)
 Output levels:  1
-  level 0: (1, 128, 64, 53)
+  level 0: (1, 128, 16, 16)
 
-Total params: 0.77M
+Total params: 1.02M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 5000 ===
-Input:  (1, 6, 64, 53)
+Input:  (1, 6, 64, 64)
 Output levels:  1
-  level 0: (1, 128, 64, 53)
+  level 0: (1, 128, 16, 16)
 
-Total params: 0.77M
+Total params: 1.02M
 All outputs finite: True
 Deterministic: True

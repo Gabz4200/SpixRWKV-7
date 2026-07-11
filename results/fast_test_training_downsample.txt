@@ -1,0 +1,125 @@
+
+=== Running Spix model with downsample_factor = 1.0 ===
+========================================================================
+  SpixRWKV-7 — Fast Convergence Test (single-batch overfit)
+========================================================================
+  Device         CPU
+  Batch size     4
+  Image size     128x128
+  Classes        10
+  Embed dims     128
+  Heads          2
+  Depth          2
+  Superpixels    36
+  Downsample F   1.0
+  Total params   774,044
+  Train params   774,044
+  Optimizer      AdamW (lr=0.0005, wd=0.0)
+  Max steps      50
+  Target acc     95%
+------------------------------------------------------------------------
+   Step      Loss     Acc  GradNorm  Time/step
+------------------------------------------------------------------------
+      1    2.3743   25.0%      8.90    3330.1ms
+      5    1.9039   25.0%      5.77    1236.1ms
+     10    1.6030   25.0%      2.95     956.7ms
+     15    1.4805   50.0%      1.35     895.2ms
+     20    1.4293   25.0%      0.81    1804.3ms
+
+  >>> Target accuracy 95% reached at step 22.
+========================================================================
+  Summary
+========================================================================
+  Total time        63.7s
+  Steps run         22
+  Final loss        1.416279
+  Final accuracy    100.0%
+  Best accuracy     100.0%
+  Steps to 90%      22
+  Steps to 95%      22
+
+  RESULT: PASS — model overfits the batch (convergence OK)
+========================================================================
+
+=== Running Spix model with downsample_factor = 2.0 ===
+========================================================================
+  SpixRWKV-7 — Fast Convergence Test (single-batch overfit)
+========================================================================
+  Device         CPU
+  Batch size     4
+  Image size     128x128
+  Classes        10
+  Embed dims     128
+  Heads          2
+  Depth          2
+  Superpixels    36
+  Downsample F   2.0
+  Total params   774,044
+  Train params   774,044
+  Optimizer      AdamW (lr=0.0005, wd=0.0)
+  Max steps      50
+  Target acc     95%
+------------------------------------------------------------------------
+   Step      Loss     Acc  GradNorm  Time/step
+------------------------------------------------------------------------
+      1    2.3783   25.0%      8.92     976.9ms
+      5    1.9048   25.0%      5.79    1324.6ms
+     10    1.6006   25.0%      2.95    1564.0ms
+     15    1.4747   50.0%      1.36    3122.3ms
+     20    1.4183   50.0%      0.88     692.8ms
+
+  >>> Target accuracy 95% reached at step 21.
+========================================================================
+  Summary
+========================================================================
+  Total time        49.7s
+  Steps run         21
+  Final loss        1.407094
+  Final accuracy    100.0%
+  Best accuracy     100.0%
+  Steps to 90%      21
+  Steps to 95%      21
+
+  RESULT: PASS — model overfits the batch (convergence OK)
+========================================================================
+
+=== Running Spix model with downsample_factor = 4.0 ===
+========================================================================
+  SpixRWKV-7 — Fast Convergence Test (single-batch overfit)
+========================================================================
+  Device         CPU
+  Batch size     4
+  Image size     128x128
+  Classes        10
+  Embed dims     128
+  Heads          2
+  Depth          2
+  Superpixels    36
+  Downsample F   4.0
+  Total params   774,044
+  Train params   774,044
+  Optimizer      AdamW (lr=0.0005, wd=0.0)
+  Max steps      50
+  Target acc     95%
+------------------------------------------------------------------------
+   Step      Loss     Acc  GradNorm  Time/step
+------------------------------------------------------------------------
+      1    2.3894   25.0%      9.01    1092.5ms
+      5    1.9163   25.0%      5.95     678.9ms
+     10    1.5944   25.0%      3.13     442.5ms
+     15    1.4429   50.0%      1.51     531.8ms
+
+  >>> Target accuracy 95% reached at step 16.
+========================================================================
+  Summary
+========================================================================
+  Total time        15.9s
+  Steps run         16
+  Final loss        1.422615
+  Final accuracy    100.0%
+  Best accuracy     100.0%
+  Steps to 90%      16
+  Steps to 95%      16
+
+  RESULT: PASS — model overfits the batch (convergence OK)
+========================================================================

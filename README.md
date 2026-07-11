@@ -17,9 +17,11 @@ The architecture merges the linear-complexity, constant-memory advantages of the
 - **Disk caching for HuggingFace datasets**: Reusable `HumorDBCached` pattern, preprocess once per split, cache as `.pt` files, subsequent epochs load directly. Cache build ~2 min for 2136 train images, total ~340 MB at 64×64.
 + **Architectural Enhancements (RMSNorm & SwiGLU)**: Added support for configurable normalization layers (`norm_layer="layernorm"|"rmsnorm"`) and activation functions (`act_layer="relu2"|"gelu"|"silu"|"swiglu"`) across the backbone, blocks, spatial/channel mixers, and classification head. RMSNorm and SwiGLU activations are inspired by modern vision/language architectures like DINOv3 and LLaMA, providing greater parameter efficiency and expressive capacity.
 + **Registers (DINOv2-style)**: Optional learnable register tokens prepended to the token sequence, allowing global context accumulation independent of superpixel representation. Enable with `register_tokens=N`.
-+ **Dynamic Image Size Support**: `img_size` parameter in `load_image_to_tensor` for flexible resolution handling. `img_size=-1` (default) uses original resolution; positive values scale proportionally to match that height.
+- **Dynamic Image Size Support**: `img_size` means target **height** in pixels, preserving aspect ratio. `img_size=-1` keeps original resolution. Positive values scale height to that pixel count; width is computed from the image’s aspect ratio.
 
 - **RMSNorm + SwiGLU Validation Complete**: Comprehensive evaluation of the new normalization/activation options shows stable convergence, deterministic behavior, and no NaN/Inf outputs. Full-batch overfit achieved in 17 steps with tiny config (64x64, 128 dims, 36 superpixels). Models under 3M params require structured shuffle (buffer=100) for stable training. See [RMSNorm + SwiGLU Results](#rmsnorm--swiglu-validation-results) for details.
+- **Conv-Stem Vision-RWKV-7 variant**: Added `ConvolutionalVision_RWKV7` — a two-stream tokenizer that stacks strided convolutions (replacing the first 4× spatial reduction) before diffSLIC superpixel clustering. Conv stem learns semantically meaningful feature maps, pooling tokens from conv features rather than raw pixel space. Configs: `conv_tiny/small/medium/large.yaml`. Integrated across all scripts (`--model-type conv`), all tests pass (126/126). See [Conv-Stem section](#conv-stem-vision-rwkv-7) for details.
+- **Test Validity Documentation**: The repo now documents what each test script validates vs what data volume it needs for meaningful conclusions. See [Test Validity section](#test-validity--data-volume-guidelines).
 - **Deep Codebase Cleanup (commit e9caf86)**: Removed all dead code — 7 unused sigma params from all forward signatures, `hilbertcurve` dependency (replaced with native vectorized sort), Q4_0/Q5_1 quantization stubs, dead C++ kernel parameters (`k`, `r_k`, `n_extra_back`), dead `c_p` gather parameter, unused `S` state variables, and `pos_grid_size`/`pos_embed` in the backbone forward. Fixed 4 bugs (`r_k` `NameError`, `ln0` bypass never applied, dead `c_p` gather always masking, unused `S` variables shadowing). Cleaned C++ kernel signatures (state made `const`, removed stale args, `-fno-lto` build flag). Ruff-clean (0 errors), 126/126 tests pass. See [commit e9caf86](https://github.com/Gabz4200/SpixRWKV7/commit/e9caf86ea57587f007c57e5626444dfe60945c9b) for full diff.
 
 ## Key Features
@@ -30,6 +32,7 @@ The architecture merges the linear-complexity, constant-memory advantages of the
   - `slic`: Classical CPU SLIC clustering using `scikit-image` with gradient pass-through.
   - `slico`: Classical CPU SLICO (SLIC-Zero) clustering.
   - `lnsnet`: Non-iterative learnable superpixel segmentation (LNS-Net, CVPR 2021) with BSDS checkpoint weight initialization support.
+- **Conv-Stem Tokenization**: A two-stream tokenizer alternative (`ConvolutionalSuperpixelTokenizer`) that stacks learnable strided convolutions before diffSLIC clustering. The raw image is spatially downsampled to match conv feature resolution, then superpixel masks from the semantic stream are used to pool the conv feature stream into tokens. This decouples the spatial reduction (learned via conv) from the grouping criteria (semantic via diffSLIC on raw pixels). Model: `ConvolutionalVision_RWKV7`, builder: `create_conv_vision_rwkv7`.
 - **VQ-VAE Tokenization Ablation (VQ_RWKV7)**: A sibling model alternative (`VQ_RWKV7`) that replaces superpixels with learned VQ-VAE codebook representations. It downsamples the image via a Convolutional VQ-VAE encoder to a regular grid of latent features, maps them to the nearest codebook embeddings (with straight-through gradients), and feeds these quantized token embeddings to the RWKV-7 recurrent blocks.
 - **Attention Residuals (AttnRes)**: Depth-wise attention residuals replacing the standard fixed additive residual accumulation with a learned softmax attention over preceding layer/block representations. Features options for `"block"` and `"full"` history aggregation, and multiple gating options (`"bias"`, `"sigmoid_scalar"`, `"sigmoid_vector"`, `"learnable_alpha"`).
 - **Perceptual Color Space Support**: Native, differentiable support for the **OkLAB** color space, including sRGB/Linear RGB conversions, alpha channel, and robust **Gamut Clipping** methods. At least until now, the Gamut Clipping is only implemented as a utility and not integrated into the training pipeline, but it is available for experimentation and also for cliping outputs on generative tasks.
@@ -112,10 +115,65 @@ Based on CPU benchmarks and training experiments, here is a detailed analysis of
 - **Backbone dominance**: At medium/large sizes, the recurrent backbone dominates, indicating that once diffSLIC is optimized, RWKV-7 could become competitive.
 - **Memory advantage**: RWKV-7 uses significantly less peak memory due to its linear recurrent structure vs ViT's quadratic attention. Note: ViT's 0.00MB reflects tracemalloc's limitation with optimized C++ kernels; both models use minimal memory in inference mode.
 
-Run your own comparison:
+Run your own comparison (supports `--model-type {spix,conv,vq}`):
 ```bash
+# Standard superpixel vs ViT
 uv run python scripts/compare_architectures.py --runs 10
+
+# Conv-Stem variant vs ViT
+uv run python scripts/compare_architectures.py --model-type conv --runs 3
+
+# Head-to-head variant comparison
+uv run python scripts/compare_architectures.py --compare-variants spix conv vq
+uv run python scripts/compare_architectures_alt_vit.py --compare-variants spix conv vq
+uv run python tasks/segmentation/ade20k/sanity.py --compare-variants spix conv vq
+
+# Sweep downsampling factors (spix backbone only)
+uv run python scripts/compare_architectures.py --downsample-factors 1.0 2.0 4.0
+uv run python scripts/compare_architectures_alt_vit.py --downsample-factors 1.0 2.0 4.0
+uv run python tasks/diagnostics/fast_test_training.py --downsample-factors 1.0 2.0 4.0
 ```
+
+### Multi-Variant Comparison (spix / conv / vq)
+
+Head-to-head inference smoke runs on CPU, tiny config, 64px input, 1 warmup + 1 timed run.
+
+| Variant | RWKV-7 (ms) | Tokenizer (ms) | Backbone (ms) | Params |
+| :--- | :--- | :--- | :--- | :--- |
+| spix | 79.07 | 9.74 | 69.32 | 0.77M |
+| conv | 82.60 | 8.43 | 74.17 | 1.02M |
+
+Alt-ViT compare script:
+
+| Variant | RWKV-7 (ms) | Tokenizer (ms) | Backbone (ms) | Params |
+| :--- | :--- | :--- | :--- | :--- |
+| spix | 86.95 | 12.79 | 74.16 | 0.77M |
+| conv | 97.12 | 5.84 | 91.28 | 1.02M |
+
+Observations:
+- On this smoke evidence, `spix` is faster than `conv` at tiny/64px inference.
+- `conv` reduced tokenizer time vs `spix` in the alt-ViT script, but total latency remains higher because of backbone cost and larger parameter count.
+- These are inference-only smoke runs; they do not establish superiority in convergence speed or downstream quality.
+
+### Tokenizer Downsampling Ablation (df = 1.0 / 2.0 / 4.0)
+
+To address tokenizer bottlenecks on high-resolution inputs, we introduced a `downsample_factor` (df) parameter to `SuperpixelTokenizer`. This downsamples the input image (using bilinear interpolation) before running diffSLIC, and upscales the produced superpixel assignment mask back to the original resolution before feature pooling, KNN, and backbone execution.
+
+#### 1. Throughput & Latency (Tiny Model, 512px input, CPU)
+
+| Downsample Factor | Total Time (ms) | Tokenizer Time (ms) | Backbone Time (ms) | Speedup vs df=1.0 |
+| :--- | :--- | :--- | :--- | :--- |
+| **df=1.0** (Baseline) | 626.42 | 448.16 | 178.26 | 1.00x |
+| **df=2.0** | 411.07 | 283.83 | 127.24 | **1.52x** |
+| **df=4.0** | 454.09 | 240.51 | 213.58 | 1.38x |
+
+#### 2. Convergence Speed (Single-batch Overfit, 128px input, CPU)
+
+- **df=1.0**: Reached 95% target accuracy at **step 22** (Total time: 63.7s)
+- **df=2.0**: Reached 95% target accuracy at **step 21** (Total time: 49.7s)
+- **df=4.0**: Reached 95% target accuracy at **step 16** (Total time: **15.9s**)
+
+**Conclusion**: Downsampling before diffSLIC dramatically speeds up tokenization and training step times. Crucially, it also accelerates convergence, as the downsampled grid filters out high-frequency spatial noise in the superpixel assignments, presenting a cleaner semantic graph to the backbone.
 
 ## Training Results
 
@@ -408,14 +466,39 @@ uv run python tasks/classification/humordb/infer.py --checkpoint checkpoints/hum
 ```
 
 ```python
-from spixrwkv7 import create_vision_rwkv7, ClassificationHead
+from spixrwkv7 import create_vision_rwkv7, create_conv_vision_rwkv7, ClassificationHead
 
+# Standard superpixel backbone
 backbone = create_vision_rwkv7(img_size=64, embed_dims=128, depth=2)
+
+# Conv-Stem variant (learned conv projection before diffSLIC)
+conv_backbone = create_conv_vision_rwkv7(
+    img_size=64, embed_dims=128, num_heads=2, depth=2, num_superpixels=64,
+    conv_stem_channels=[32, 64, 128], conv_stem_strides=[1, 2, 2],
+)
+
 head = ClassificationHead(embed_dims=128, num_classes=10)
 
 x = torch.randn(4, 6, 64, 64)
 features = backbone(x)  # tuple of dense feature maps
 logits = head(features[0])  # (4, 10)
+```
+
+### Running Different Model Variants
+
+All training and benchmark scripts support `--model-type {spix,conv,vq}`:
+
+```bash
+# Conv-Stem variant
+uv run python scripts/demo.py --model-type conv --img-size 64 --embed-dims 128 --num-heads 2 --depth 2
+uv run python tasks/diagnostics/fast_test_training.py --model-type conv --max-steps 50
+
+# VQ-VAE variant
+uv run python scripts/demo.py --model-type vq --img-size 64 --embed-dims 128 --num-heads 2 --depth 2
+uv run python tasks/diagnostics/fast_test_training.py --model-type vq --max-steps 50
+
+# Standard superpixel variant
+uv run python scripts/demo.py --model-type spix --img-size 512 --embed-dims 192 --num-heads 3 --depth 12
 ```
 
 ## Project Structure
@@ -426,6 +509,7 @@ VisualRWKV7_Pytorch/
 │   ├── __init__.py              # Public API exports (includes C++ kernel fallback)
 │   ├── models/
 │   │   ├── spixrwkv7.py         # Backbone + all modules (PyTorch implementation)
+│   │   ├── conv_spixrwkv7.py    # Conv-Stem Vision-RWKV-7 variant
 │   │   └── vq_rwkv7.py          # VQ-RWKV-7 model (VQ-VAE tokenization ablation)
 │   ├── data/
 │   │   ├── colors.py            # OkLAB/sRGB conversion utilities
@@ -485,7 +569,11 @@ VisualRWKV7_Pytorch/
 │   │   ├── tiny.yaml              # Tiny config (192-dim, 12 layers)
 │   │   ├── small.yaml             # Small config
 │   │   ├── medium.yaml            # Medium config
-│   │   └── large.yaml             # Large config
+│   │   ├── large.yaml             # Large config
+│   │   ├── conv_tiny.yaml         # Conv-Stem tiny config
+│   │   ├── conv_small.yaml        # Conv-Stem small config
+│   │   ├── conv_medium.yaml       # Conv-Stem medium config
+│   │   └── conv_large.yaml        # Conv-Stem large config
 │   └── task/
 │       ├── humordb.yaml           # HumorDB training config
 │       └── ade20k.yaml            # ADE20K training config
@@ -516,7 +604,57 @@ Input Image (B, 6, H, W)
     Token sequence (B, N, D) + neighbors (B, N, K)
 ```
 
+### Conv-Stem Tokenization (Convolutional Vision-RWKV-7)
+
+An alternative two-stream architecture where a learnable conv stem replaces the
+first 4× spatial reduction before diffSLIC superpixel clustering.
+
+The raw 6-channel input is processed by two parallel streams:
+- **Semantic stream**: $\text{interpolate}(x_{\text{raw}})$ → downsampled to match
+  conv feature resolution → diffSLIC → superpixel masks
+- **Feature stream**: $\text{ConvStem}(x_{\text{raw}})$ → learned deep features
+  at reduced resolution → pooled via superpixel masks → tokens
+
+This decouples spatial reduction (learned via conv, aggressive stride) from
+grouping criteria (semantic via diffSLIC on physically meaningful raw pixels).
+The conv stem produces $4\times$ smaller spatial maps before tokenization,
+reducing downstream token count by $16\times$ vs the standard pipeline.
+
+```
+Input Image (B, 6, H, W)
+        │
+        ├──► ConvStem (strides 1,2,2) ──► Feature map (B, C, H/4, W/4)
+        │                                   │
+        └──► interpolate (scale=1/4)  ──► Raw downsampled (B, 6, H/4, W/4)
+                                            │
+                                            ▼
+                                       diffSLIC
+                                            │
+                                            ▼
+                                    Superpixel masks (B, K, H/4, W/4)
+                                            │
+                                            ▼
+                              ConvSuperpixelEmbedding
+                              (pool features using masks)
+                                            │
+                                            ▼
+                              Token sequence (B, N, D)
+```
+
+**Configurations** (`configs/model/conv_{tiny,small,medium,large}.yaml`):
+- Conv stem channels: `[32,64,128]` (tiny), `[64,128,256]` (small/medium), `[96,192,384]` (large)
+- All use strides `(1,2,2)` → $4\times$ spatial reduction
+- Conv stem norm: `batchnorm2d`, post-conv norm: `layernorm`
+- Builder: `create_conv_vision_rwkv7` from `spixrwkv7.models.conv_spixrwkv7`
+
+Run with:
+```bash
+uv run python scripts/demo.py --model-type conv --img-size 64 --embed-dims 128 --num-heads 2 --depth 2 --num-superpixels 64 --output results/demo_conv.txt
+uv run python tasks/diagnostics/fast_test_training.py --model-type conv --max-steps 50
+```
+
 ### RWKV-7 Block (Bidirectional)
+
 
 ```
 Input tokens (B, N, D)
@@ -564,6 +702,9 @@ Feature tokens at selected blocks
 | `SuperpixelTokenizer` | Vision-to-tokens pipeline          | diffSLIC → `SuperpixelEmbedding` → KNN graph → Hilbert sort → neighbor remap               |
 | `ClassificationHead`  | Downstream classifier (separate)   | GAP → LayerNorm → Linear                                                                   |
 | `SuperpixelEmbedding` | Pixel-to-token pooling             | Conv features + centroid encoding + Fourier positional embedding                           |
+| `ConvStem`            | Strided conv feature extractor      | Conv2D → BatchNorm2D → ReLU stack (strides 1,2,2)                                        |
+| `ConvolutionalSuperpixelTokenizer` | Two-stream tokenizer for conv pipeline | ConvStem + downsampled diffSLIC + mask pooling                                  |
+| `ConvolutionalVision_RWKV7` | Full backbone with conv stem      | `ConvStem` → `ConvolutionalSuperpixelTokenizer` → `Vision_RWKV7_Block`s × N → output        |
 
 ## Testing
 
@@ -596,6 +737,27 @@ Tests are structured to verify behavior through **public interfaces** only, inte
 - Superpixel embedding modes (hard/soft)
 - Color space correctness and gamut clipping stability
 - diffSLIC numerical stability and C++ backend
+
+## Test Validity — What Each Script Actually Measures
+
+Different test scripts use vastly different amounts of training data. This table
+clarifies what each test validates vs what it cannot measure:
+
+| Test | Data Volume | Validates | NOT valid for |
+|------|-------------|-----------|---------------|
+| `fast_test_training.py` | 1 batch (4 images) | Architecture converges, no bugs | Generalization comparison |
+| `diagnose_training.py --no-head` | 1 batch synthetic | Features are finite, nonzero variance | Quality comparison |
+| `ade20k/sanity.py` | 4 train images | Pipeline integration | Segmentation quality |
+| `compare_architectures.py` | Random noise | Speed/memory benchmarks | Accuracy or quality |
+| `compare_architectures_alt_vit.py` | Random noise | Alternative ViT speed/memory benchmarks | Accuracy or quality |
+| `humordb/train.py` | 2136 images | Full regression training | — (sufficient for quality metrics) |
+| `demo.py` | Random noise | Output finite, deterministic, shape correct | Any performance metric |
+| 
+| **Key takeaway**: For a statistically meaningful comparison between architecture
+| variants (spix vs conv vs vq), run `humordb/train.py` with 3–5 seeds and report
+| mean ± std for R², Pearson r, RMSE. The diagnostics scripts verify correctness,
+| not quality. The HumorDB regression is the only test with sufficient data volume
+| for real quality comparisons.
 
 ## Utilities
 

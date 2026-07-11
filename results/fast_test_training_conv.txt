@@ -8,7 +8,7 @@
   Embed dims     128
   Heads          2
   Depth          2
-  Superpixels    36
+  Superpixels    64
   Total params   1,026,315
   Train params   1,026,315
   Optimizer      AdamW (lr=0.0005, wd=0.0)
@@ -17,20 +17,23 @@
 ------------------------------------------------------------------------
    Step      Loss     Acc  GradNorm  Time/step
 ------------------------------------------------------------------------
-      1    2.1064   25.0%     10.97     875.6ms
-      5    1.3020  100.0%      7.80     851.8ms
+      1    2.0925   25.0%     10.91   11513.3ms
+      5    1.4448   25.0%      8.08    2875.3ms
 
-  >>> Target accuracy 95% reached at step 5.
+  >>> Target accuracy 95% reached at step 6.
+==
+  >>> Target accuracy 95% reached at step 12.
 ========================================================================
   Summary
 ========================================================================
-  Total time        4.3s
-  Steps run         5
-  Final loss        1.302009
+  Total time        67.3s
+  Steps run         12
+  Final loss        1.160921
   Final accuracy    100.0%
   Best accuracy     100.0%
-  Steps to 90%      5
-  Steps to 95%      5
+  Steps to 90%      12
+  Steps to 95%      12
 
   RESULT: PASS — model overfits the batch (convergence OK)
 ========================================================================
+Results saved to results/fast_test_training.txt

@@ -1,0 +1,81 @@
+Running on device: cpu
+Warmup runs: 5, Timed runs: 3
+Batch size: 1
+======================================================================
+
+======================================================================
+PART 1: MODEL SIZE COMPARISON
+======================================================================
+
+--- TINY Config ---
+  img_size: 512
+  embed_dims: 128
+  depth: 2
+  num_heads: 2
+  num_superpixels: 36
+  Vision RWKV-7 params: 0.77M
+  ViT params: 5.88M
+  Vision RWKV-7 peak memory: 0.02MB
+  ViT peak memory: 0.00MB
+
+  Benchmarking Vision RWKV-7...
+    Total: 469.33ms
+    diffSLIC (tokenizer): 370.82ms
+    Backbone (recurrent): 98.51ms
+  Benchmarking ViT...
+    Total: 193.17ms
+
+  Speed ratio (ViT/RWKV-7): 0.41x
+    ViT is 2.43x FASTER than Vision RWKV-7
+
+======================================================================
+PART 2: RESOLUTION SWEEP
+======================================================================
+
+======================================================================
+RESOLUTION SWEEP FOR SMALL MODEL
+======================================================================
+Model config: embed_dims=256, depth=6, num_heads=4
+Testing image sizes: [64, 128, 512, 1024]
+
+  --- Image size: 64x64 ---
+    Vision RWKV-7 params: 7.86M
+    ViT params: 21.98M
+    RWKV-7 peak memory: 0.04MB
+    ViT peak memory: 0.00MB
+    RWKV-7 Total: 862.89ms
+    RWKV-7 diffSLIC: 23.47ms
+    RWKV-7 Backbone: 839.41ms
+    ViT Total: 14.08ms
+    Speed ratio (ViT/RWKV-7): 0.02x
+
+  --- Image size: 128x128 ---
+    Vision RWKV-7 params: 7.86M
+    ViT params: 22.00M
+    RWKV-7 peak memory: 0.04MB
+    ViT peak memory: 0.00MB
+    RWKV-7 Total: 981.10ms
+    RWKV-7 diffSLIC: 70.63ms
+    RWKV-7 Backbone: 910.48ms
+    ViT Total: 33.39ms
+    Speed ratio (ViT/RWKV-7): 0.03x
+
+  --- Image size: 512x512 ---
+    Vision RWKV-7 params: 7.86M
+    ViT params: 22.37M
+    RWKV-7 peak memory: 0.04MB
+    ViT peak memory: 0.00MB
+    RWKV-7 Total: 2512.90ms
+    RWKV-7 diffSLIC: 1097.57ms
+    RWKV-7 Backbone: 1415.33ms
+    ViT Total: 841.63ms
+    Speed ratio (ViT/RWKV-7): 0.33x
+
+  --- Image size: 1024x1024 ---
+    Vision RWKV-7 params: 7.86M
+    ViT params: 23.55M
+    RWKV-7 peak memory: 0.04MB
+    ViT peak memory: 0.00MB
+    RWKV-7 Total: 6616.69ms
+    RWKV-7 diffSLIC: 4576.42ms
+    RWKV-7 Backbone: 2040.27ms

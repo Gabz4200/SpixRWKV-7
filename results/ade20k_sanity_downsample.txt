@@ -1,0 +1,26 @@
+========================================================================
+ADE20K Sanity Overfit Test
+========================================================================
+  Model scale:     tiny
+  embed_dims:      128  (num_heads=2)
+  depth:           4
+  num_superpixels: 36
+  img_size:        64
+  num_train:       128
+  num_val:         32
+  batch_size:      4
+  lr:              0.0005
+  epochs:          2
+  device:          cpu
+========================================================================
+Discovering ADE20K classes from train split...
+  Found 285 unique classes in 128 train samples
+  Unknown classes in val set: 0 
+
+
+------------------------------------------------------------------------
+Training variant: spix (downsample_factor=1.0)
+------------------------------------------------------------------------
+  Model params: 1,537,298 (trainable: 1,537,298)
+  Seg head:      37,121  (285 classes x 128)
+

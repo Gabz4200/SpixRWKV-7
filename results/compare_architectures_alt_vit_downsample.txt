@@ -1,0 +1,134 @@
+Running on device: cpu
+Warmup runs: 2, Timed runs: 5
+Batch size: 1
+======================================================================
+
+======================================================================
+PART 1: MODEL SIZE COMPARISON
+======================================================================
+
+--- TINY ---
+  running spix downsample_factor=1.0
+  running spix downsample_factor=2.0
+  running spix downsample_factor=4.0
+
+--- SMALL ---
+  running spix downsample_factor=1.0
+  running spix downsample_factor=2.0
+  running spix downsample_factor=4.0
+
+--- MEDIUM ---
+  running spix downsample_factor=1.0
+  running spix downsample_factor=2.0
+  running spix downsample_factor=4.0
+
+======================================================================
+PART 2: RESOLUTION SWEEP
+======================================================================
+
+======================================================================
+RESOLUTION SWEEP FOR SMALL MODEL
+======================================================================
+Model config: embed_dims=256, depth=6, num_heads=4
+Testing image sizes: [64, 128, 512]
+
+  --- Image size: 64x64 ---
+
+  --- Image size: 128x128 ---
+
+  --- Image size: 512x512 ---
+
+======================================================================
+FINAL SUMMARY
+======================================================================
+Size     Variant  Img    RWKV-7     ViT        Speedup 
+----------------------------------------------------------------------
+tiny     spix     512    616.64     423.44     0.69    x
+tiny     spix     512    438.50     450.73     1.03    x
+tiny     spix     512    424.15     509.14     1.20    x
+small    spix     512    5758.60    1302.46    0.23    x
+small    spix     512    2723.12    2295.23    0.84    x
+small    spix     512    2208.89    1123.26    0.51    x
+medium   spix     512    5652.09    2331.49    0.41    x
+medium   spix     512    6321.50    2795.26    0.44    x
+medium   spix     512    5944.06    2354.61    0.40    x
+small    small    64     879.23     15.40      0.02    x
+small    small    128    980.45     43.94      0.04    x
+small    small    512    2157.34    762.19     0.35    x
+
+======================================================================
+DIFFSLIC BREAKDOWN ANALYSIS
+======================================================================
+This shows what fraction of Vision RWKV-7 time is spent in diffSLIC.
+When diffSLIC is ported to optimized C++, the backbone speedup
+relative to ViT becomes more significant.
+
+Variant    Tokenizer %    Backbone %     Backbone/Tokenizer
+----------------------------------------------------------------------
+spix       72.4           27.6           0.38              x
+spix       61.7           38.3           0.62              x
+spix       54.3           45.7           0.84              x
+spix       35.5           64.5           1.82              x
+spix       41.7           58.3           1.40              x
+spix       28.1           71.9           2.56              x
+spix       29.7           70.3           2.36              x
+spix       20.6           79.4           3.86              x
+spix       20.8           79.2           3.80              x
+small      2.7            97.3           35.64             x
+small      5.4            94.6           17.68             x
+small      48.0           52.0           1.08              x
+
+======================================================================
+MEMORY COMPARISON
+======================================================================
+Variant    RWKV-7 (MB)    ViT (MB)       Ratio     
+----------------------------------------------------------------------
+spix       0.02           0.01           0.36      x
+spix       0.02           0.00           0.13      x
+spix       0.02           0.00           0.14      x
+spix       0.05           0.00           0.08      x
+spix       0.05           0.00           0.06      x
+spix       0.04           0.00           0.06      x
+spix       0.06           0.00           0.07      x
+spix       0.06           0.00           0.05      x
+spix       0.06           0.00           0.05      x
+small      0.05           0.00           0.10      x
+small      0.05           0.00           0.10      x
+small      0.05           0.00           0.08      x
+
+======================================================================
+ANALYSIS
+======================================================================
+Fastest Vision RWKV-7 run: spix tiny @ 512px = 424.15ms
+
+Parameter efficiency (time per M params):
+  tiny    :
+    spix       798.6437 ms/M params
+    spix       567.9252 ms/M params
+    spix       549.3308 ms/M params
+  small   :
+    spix       732.1942 ms/M params
+    spix       346.2389 ms/M params
+    spix       280.8564 ms/M params
+    small      111.7922 ms/M params
+    small      124.6627 ms/M params
+    small      274.3017 ms/M params
+  medium  :
+    spix       97.1943 ms/M params
+    spix       108.7056 ms/M params
+    spix       102.2151 ms/M params
+
+Key findings:
+  tiny baseline: diffSLIC dominates (72% of time)
+    -> C++ diffSLIC kernel would significantly improve RWKV-7 speed
+  tiny baseline: diffSLIC dominates (62% of time)
+    -> C++ diffSLIC kernel would significantly improve RWKV-7 speed
+  tiny baseline: diffSLIC dominates (54% of time)
+    -> C++ diffSLIC kernel would significantly improve RWKV-7 speed
+  small baseline: Backbone dominates (64% of time)
+  small baseline: Backbone dominates (58% of time)
+  small baseline: Backbone dominates (72% of time)
+  medium baseline: Backbone dominates (70% of time)
+  medium baseline: Backbone dominates (79% of time)
+  medium baseline: Backbone dominates (79% of time)
+  small alt variant: fastest small @ 64px = 879.23ms

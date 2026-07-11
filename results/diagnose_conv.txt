@@ -1,0 +1,8 @@
+usage: diagnose_training.py [-h] [--all] [--lr-sweep] [--depth] [--seeds]
+                            [--grad-deep] [--no-head]
+                            [--model-type {spix,vq,conv}]
+                            [--codebook-size CODEBOOK_SIZE]
+                            [--downsample-factor DOWNSAMPLE_FACTOR]
+                            [--latent-dim LATENT_DIM]
+                            [--num-res-blocks NUM_RES_BLOCKS]
+diagnose_training.py: error: unrecognized arguments: --steps 5

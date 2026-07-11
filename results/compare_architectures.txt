@@ -1,5 +1,5 @@
 Running on device: cpu
-Warmup runs: 1, Timed runs: 3
+Warmup runs: 2, Timed runs: 5
 Batch size: 1
 ======================================================================
 
@@ -7,47 +7,11 @@ Batch size: 1
 PART 1: MODEL SIZE COMPARISON
 ======================================================================
 
---- TINY Config ---
-  img_size: 512
-  embed_dims: 128
-  depth: 2
-  num_heads: 2
-  num_superpixels: 36
-  Vision RWKV-7 params: 2.42M
-  ViT params: 5.88M
-  Vision RWKV-7 peak memory: 0.64MB
-  ViT peak memory: 0.00MB
+--- TINY (factor=1.0) ---
 
-  Benchmarking Vision RWKV-7...
-    Total: 10364.68ms
-    diffSLIC (tokenizer): 501.63ms
-    Backbone (recurrent): 9863.05ms
-  Benchmarking ViT...
-    Total: 206.31ms
+--- TINY (factor=2.0) ---
 
-  Speed ratio (ViT/RWKV-7): 0.02x
-    ViT is 50.24x FASTER than Vision RWKV-7
-
---- SMALL Config ---
-  img_size: 512
-  embed_dims: 256
-  depth: 6
-  num_heads: 4
-  num_superpixels: 144
-  Vision RWKV-7 params: 14.34M
-  ViT params: 22.37M
-  Vision RWKV-7 peak memory: 0.17MB
-  ViT peak memory: 0.00MB
-
-  Benchmarking Vision RWKV-7...
-    Total: 9303.77ms
-    diffSLIC (tokenizer): 430.96ms
-    Backbone (recurrent): 8872.81ms
-  Benchmarking ViT...
-    Total: 631.52ms
-
-  Speed ratio (ViT/RWKV-7): 0.07x
-    ViT is 14.73x FASTER than Vision RWKV-7
+--- TINY (factor=4.0) ---
 
 ======================================================================
 PART 2: RESOLUTION SWEEP
@@ -57,55 +21,68 @@ PART 2: RESOLUTION SWEEP
 RESOLUTION SWEEP FOR SMALL MODEL
 ======================================================================
 Model config: embed_dims=256, depth=6, num_heads=4
-Testing image sizes: [64, 128, 256]
+Testing image sizes: [64, 128, 512, 1024]
 
   --- Image size: 64x64 ---
-    Vision RWKV-7 params: 14.34M
+    Vision RWKV-7 params: 7.86M
     ViT params: 21.98M
-    RWKV-7 peak memory: 0.02MB
+    RWKV-7 peak memory: 0.04MB
     ViT peak memory: 0.00MB
-    RWKV-7 Total: 159.98ms
-    RWKV-7 diffSLIC: 11.95ms
-    RWKV-7 Backbone: 148.03ms
-    ViT Total: 14.46ms
-    Speed ratio (ViT/RWKV-7): 0.09x
+    RWKV-7 Total: 1280.88ms
+    RWKV-7 diffSLIC: 33.38ms
+    RWKV-7 Backbone: 1247.51ms
+    ViT Total: 18.31ms
+    Speed ratio (ViT/RWKV-7): 0.01x
 
   --- Image size: 128x128 ---
-    Vision RWKV-7 params: 14.34M
+    Vision RWKV-7 params: 7.86M
     ViT params: 22.00M
-    RWKV-7 peak memory: 0.02MB
+    RWKV-7 peak memory: 0.04MB
     ViT peak memory: 0.00MB
-    RWKV-7 Total: 591.31ms
-    RWKV-7 diffSLIC: 28.53ms
-    RWKV-7 Backbone: 562.78ms
-    ViT Total: 26.74ms
-    Speed ratio (ViT/RWKV-7): 0.05x
+    RWKV-7 Total: 1309.35ms
+    RWKV-7 diffSLIC: 82.72ms
+    RWKV-7 Backbone: 1226.63ms
+    ViT Total: 38.56ms
+    Speed ratio (ViT/RWKV-7): 0.03x
 
-  --- Image size: 256x256 ---
-    Vision RWKV-7 params: 14.34M
-    ViT params: 22.07M
-    RWKV-7 peak memory: 0.05MB
+  --- Image size: 512x512 ---
+    Vision RWKV-7 params: 7.86M
+    ViT params: 22.37M
+    RWKV-7 peak memory: 0.04MB
     ViT peak memory: 0.00MB
-    RWKV-7 Total: 2326.18ms
-    RWKV-7 diffSLIC: 125.78ms
-    RWKV-7 Backbone: 2200.40ms
-    ViT Total: 94.10ms
-    Speed ratio (ViT/RWKV-7): 0.04x
+    RWKV-7 Total: 2884.06ms
+    RWKV-7 diffSLIC: 1294.09ms
+    RWKV-7 Backbone: 1589.97ms
+    ViT Total: 766.34ms
+    Speed ratio (ViT/RWKV-7): 0.27x
+
+  --- Image size: 1024x1024 ---
+    Vision RWKV-7 params: 7.86M
+    ViT params: 23.55M
+    RWKV-7 peak memory: 0.04MB
+    ViT peak memory: 0.00MB
+    RWKV-7 Total: 7109.94ms
+    RWKV-7 diffSLIC: 4843.30ms
+    RWKV-7 Backbone: 2266.64ms
+    ViT Total: 7387.86ms
+    Speed ratio (ViT/RWKV-7): 1.04x
 
   Resolution sweep results:
   Img      RWKV-7       ViT          Speedup    Tokenizer %  Mem RWKV   Mem ViT   
   --------------------------------------------------------------------------
-  64       159.98       14.46        0.09      x 7.5          0.02       0.00      
-  128      591.31       26.74        0.05      x 4.8          0.02       0.00      
-  256      2326.18      94.10        0.04      x 5.4          0.05       0.00      
+  64       1280.88      18.31        0.01      x 2.6          0.04       0.00      
+  128      1309.35      38.56        0.03      x 6.3          0.04       0.00      
+  512      2884.06      766.34       0.27      x 44.9         0.04       0.00      
+  1024     7109.94      7387.86      1.04      x 68.1         0.04       0.00      
 
 ======================================================================
 FINAL SUMMARY
 ======================================================================
-Size     Img    RWKV-7     ViT        Speedup 
+Size           Img    RWKV-7     ViT        Speedup 
 ----------------------------------------------------------------------
-tiny     512    10364.68   206.31     0.02    x
-small    512    9303.77    631.52     0.07    x
+tiny (df=1.0)  512    626.42     261.81     0.42    x
+tiny (df=2.0)  512    411.07     267.82     0.65    x
+tiny (df=4.0)  512    454.09     273.87     0.60    x
 
 ======================================================================
 DIFFSLIC BREAKDOWN ANALYSIS
@@ -114,31 +91,50 @@ This shows what fraction of Vision RWKV-7 time is spent in diffSLIC.
 When diffSLIC is ported to optimized C++, the backbone speedup
 relative to ViT becomes more significant.
 
-Size     Tokenizer %  Backbone %   Backbone/Tokenizer
+Size           Tokenizer %  Backbone %   Backbone/Tokenizer
 ----------------------------------------------------------------------
-tiny     4.8          95.2         19.66             x
-small    4.6          95.4         20.59             x
+tiny (df=1.0)  71.5         28.5         0.40              x
+tiny (df=2.0)  69.0         31.0         0.45              x
+tiny (df=4.0)  53.0         47.0         0.89              x
 
 ======================================================================
 MEMORY COMPARISON
 ======================================================================
-Size     RWKV-7 (MB)    ViT (MB)       Ratio     
+Size           RWKV-7 (MB)    ViT (MB)       Ratio     
 ----------------------------------------------------------------------
-tiny     0.64           0.00           0.00      x
-small    0.17           0.00           0.02      x
+tiny (df=1.0)  0.02           0.00           0.14      x
+tiny (df=2.0)  0.02           0.00           0.14      x
+tiny (df=4.0)  0.02           0.00           0.14      x
 
 ======================================================================
 ANALYSIS
 ======================================================================
-Fastest Vision RWKV-7: small (9303.77ms)
+Fastest Vision RWKV-7: tiny (df=2.0) (411.07ms)
 
 Parameter efficiency (time per M params):
-  tiny    : RWKV-7=4274.6024ms/M, ViT=35.1098ms/M
-  small   : RWKV-7=648.7472ms/M, ViT=28.2334ms/M
+  tiny (df=1.0) : RWKV-7=811.3074ms/M, ViT=44.5564ms/M
+  tiny (df=2.0) : RWKV-7=532.3946ms/M, ViT=45.5788ms/M
+  tiny (df=4.0) : RWKV-7=588.1099ms/M, ViT=46.6087ms/M
 
 Key findings:
-  tiny: Backbone dominates (95% of time)
-  small: Backbone dominates (95% of time)
+  tiny (df=1.0): diffSLIC dominates (72% of time)
+    -> C++ diffSLIC kernel would significantly improve RWKV-7 speed
+  tiny (df=2.0): diffSLIC dominates (69% of time)
+    -> C++ diffSLIC kernel would significantly improve RWKV-7 speed
+  tiny (df=4.0): diffSLIC dominates (53% of time)
+    -> C++ diffSLIC kernel would significantly improve RWKV-7 speed
+
+======================================================================
+VARIANT COMPARISON
+======================================================================
+
+--- TINY ---
+Variant          Params(M)    Total(ms)    Tokenizer(ms)    Backbone(ms)   Speedup   
+--------------------------------------------------------------------------------
+spix (df=1.0)    0.77         626.42       448.16           178.26         0.42      x
+spix (df=2.0)    0.77         411.07       283.83           127.24         0.65      x
+spix (df=4.0)    0.77         454.09       240.51           213.58         0.60      x
+  -> Fastest variant: spix (411.07ms)
 
 ======================================================================
 WHY IS ViT FASTER ON CPU?

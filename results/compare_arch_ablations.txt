@@ -1,0 +1,5 @@
+compare_arch_ablations
+Traceback (most recent call last):
+  File "/home/gabz/Projects/SpixRWKV7/scripts/compare_architectures.py", line 23, in <module>
+    from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
+ModuleNotFoundError: No module named 'spixrwkv7'

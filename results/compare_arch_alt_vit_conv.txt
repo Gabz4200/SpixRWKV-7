@@ -1,0 +1,63 @@
+Running on device: cpu
+Warmup runs: 5, Timed runs: 3
+Batch size: 1
+======================================================================
+
+======================================================================
+PART 1: MODEL SIZE COMPARISON
+======================================================================
+
+--- TINY Config ---
+  img_size: 512
+  embed_dims: 128
+  depth: 2
+  num_heads: 2
+  num_superpixels: 36
+  Vision RWKV-7 params: 1.02M
+  ViT params: 5.67M
+  Vision RWKV-7 peak memory: 0.02MB
+  ViT peak memory: 0.01MB
+
+  Benchmarking Vision RWKV-7...
+    Total: 495.22ms
+    diffSLIC (tokenizer): 229.48ms
+    Backbone (recurrent): 265.74ms
+  Benchmarking ViT...
+    Total: 394.41ms
+
+  Speed ratio (ViT/RWKV-7): 0.80x
+    ViT is 1.26x FASTER than Vision RWKV-7
+
+--- SMALL Config ---
+  img_size: 512
+  embed_dims: 256
+  depth: 6
+  num_heads: 4
+  num_superpixels: 144
+  Vision RWKV-7 params: 8.88M
+  ViT params: 21.96M
+  Vision RWKV-7 peak memory: 0.03MB
+  ViT peak memory: 0.00MB
+
+  Benchmarking Vision RWKV-7...
+    Total: 3061.57ms
+    diffSLIC (tokenizer): 175.71ms
+    Backbone (recurrent): 2885.85ms
+  Benchmarking ViT...
+    Total: 1188.01ms
+
+  Speed ratio (ViT/RWKV-7): 0.39x
+    ViT is 2.58x FASTER than Vision RWKV-7
+
+--- MEDIUM Config ---
+  img_size: 512
+  embed_dims: 512
+  depth: 12
+  num_heads: 8
+  num_superpixels: 196
+  Vision RWKV-7 params: 59.02M
+  ViT params: 86.38M
+  Vision RWKV-7 peak memory: 0.04MB
+  ViT peak memory: 0.00MB
+
+  Benchmarking Vision RWKV-7...

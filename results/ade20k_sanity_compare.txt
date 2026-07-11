@@ -1,0 +1,56 @@
+
+ade20k_sanity_compare
+========================================================================
+ADE20K Sanity Overfit Test
+========================================================================
+  Model scale:     tiny
+  embed_dims:      128  (num_heads=2)
+  depth:           4
+  num_superpixels: 36
+  img_size:        64
+  num_train:       16
+  num_val:         8
+  batch_size:      4
+  lr:              0.0005
+  epochs:          1
+  device:          cpu
+========================================================================
+Discovering ADE20K classes from train split...
+  Found 131 unique classes in 16 train samples
+  Unknown classes in val set: 61 
+
+  Model params: 1,517,586 (trainable: 1,517,586)
+  Seg head:      17,409  (131 classes x 128)
+
+/home/gabz/Projects/SpixRWKV7/.venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py:1095: UserWarning: 'pin_memory' argument is set as true but no accelerator is found, then device pinned memory won't be used.
+  super().__init__(loader)
+Too many dataloader workers: 2 (max is dataset.num_shards=1). Stopping 1 dataloader workers.
+Traceback (most recent call last):
+  File "/home/gabz/Projects/SpixRWKV7/tasks/segmentation/ade20k/sanity.py", line 556, in <module>
+    main()
+  File "/home/gabz/Projects/SpixRWKV7/tasks/segmentation/ade20k/sanity.py", line 471, in main
+    for batch_idx, (inputs, targets) in enumerate(train_loader):
+                                        ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/gabz/Projects/SpixRWKV7/.venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py", line 718, in __next__
+    data = self._next_data()
+           ^^^^^^^^^^^^^^^^^
+  File "/home/gabz/Projects/SpixRWKV7/.venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py", line 1525, in _next_data
+    return self._process_data(data, worker_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/gabz/Projects/SpixRWKV7/.venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py", line 1563, in _process_data
+    data.reraise()
+  File "/home/gabz/Projects/SpixRWKV7/.venv/lib/python3.12/site-packages/torch/_utils.py", line 774, in reraise
+    raise exception
+ValueError: Caught ValueError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "/home/gabz/Projects/SpixRWKV7/.venv/lib/python3.12/site-packages/torch/utils/data/_utils/worker.py", line 374, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/gabz/Projects/SpixRWKV7/.venv/lib/python3.12/site-packages/torch/utils/data/_utils/fetch.py", line 35, in fetch
+    data.append(next(self.dataset_iter))
+                ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/gabz/Projects/SpixRWKV7/tasks/segmentation/ade20k/sanity.py", line 183, in __iter__
+    _, _, H, W = img_tensor.shape
+    ^^^^^^^^^^
+ValueError: not enough values to unpack (expected 4, got 3)
+
