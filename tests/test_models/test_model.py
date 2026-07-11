@@ -631,6 +631,37 @@ def test_forward_num_superpixels_override():
     # worked for the new K.
 
 
+def test_vision_rwkv7_downsample_factor():
+    """Verify that downsample_factor runs correctly and supports non-integer or factor > 1."""
+    # Test factor = 2.0 (downsamples 64x64 to 32x32)
+    model = create_vision_rwkv7(
+        img_size=64,
+        embed_dims=64,
+        num_heads=1,
+        depth=1,
+        num_superpixels=16,
+        downsample_factor=2.0,
+    )
+    x = torch.randn(1, 6, 64, 64)
+    outs = model(x)
+    # Output shape should match the token grid resolution (4x4 superpixels)
+    assert outs[0].shape == (1, 64, 4, 4)
+
+    # Test with scatter_output=True: mask is upscaled back, so output resolution is original
+    model_scatter = create_vision_rwkv7(
+        img_size=64,
+        embed_dims=64,
+        num_heads=1,
+        depth=1,
+        num_superpixels=16,
+        downsample_factor=2.0,
+        scatter_output=True,
+    )
+    outs_scatter = model_scatter(x)
+    assert outs_scatter[0].shape == (1, 64, 64, 64)
+
+
+
 def test_parallel_recurrent_scan_equivalence():
     """Verify that ParallelRecurrentScan output matches RecurrentScan and OptimizedRecurrentScan."""
     from spixrwkv7.kernels.optimized_block import OptimizedRecurrentScan, ParallelRecurrentScan
