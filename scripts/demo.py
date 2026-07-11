@@ -18,6 +18,7 @@ from spixrwkv7.kernels.optimized_vision import (  # noqa: E402
     create_optimized_vision_rwkv7 as _create_model,
 )
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7  # noqa: E402
+from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7  # noqa: E402
 
 # Inspired by: https://arxiv.org/abs/2109.08203
 # Recommended: run 5-10 seeds, report mean ± std
@@ -39,7 +40,7 @@ def main():
     parser.add_argument("--spixel-backend", type=str, default="diff_slic", choices=["diff_slic", "grid", "slic", "slico", "lnsnet"])
     parser.add_argument("--use-attnres", action="store_true", help="Enable Attention Residuals")
     parser.add_argument("--use-jit", action="store_true", help="Enable torch.compile JIT")
-    parser.add_argument("--model-type", choices=["spix", "vq"], default="spix",
+    parser.add_argument("--model-type", choices=["spix", "vq", "conv"], default="spix",
                         help="Backbone type (default: spix)")
     parser.add_argument("--codebook-size", type=int, default=1024,
                         help="VQ codebook size")
@@ -59,7 +60,31 @@ def main():
 
     with redirect_stdout_tee(args.output):
         # Initialize the model (Superpixel or VQ)
-        if args.model_type == "vq":
+        if args.model_type == "conv":
+            model = create_conv_vision_rwkv7(
+                img_size=args.img_size,
+                embed_dims=args.embed_dims,
+                num_heads=args.num_heads,
+                depth=args.depth,
+                init_values=1e-5,
+                final_norm=True,
+                out_indices=[args.depth - 1],
+                num_superpixels=args.num_superpixels,
+                scatter_output=True,
+                diff_slic_iters=args.diff_slic_iters,
+                compactness=10,
+                norm_layer=args.norm_layer,
+                act_layer=args.act_layer,
+                spixel_backend=args.spixel_backend,
+                use_attnres=args.use_attnres,
+                use_jit=args.use_jit,
+                conv_stem_channels=(32, 64, 128),
+                conv_stem_kernel_sizes=(3, 5, 5),
+                conv_stem_strides=(1, 2, 2),
+                conv_stem_norm="batchnorm2d",
+                conv_post_norm="layernorm",
+            )
+        elif args.model_type == "vq":
             model = create_vq_rwkv7(
                 img_size=args.img_size,
                 embed_dims=args.embed_dims,
@@ -116,7 +141,7 @@ def main():
                 # Dummy image input
                 x_raw = preprocess_image_for_rwkv7(
                     "test_image_from_slirack_pinterest.jpg",
-                    target_size=(args.img_size, args.img_size),
+                    img_size=args.img_size,
                     include_alpha=True,
                 )
                 # x_raw is already (1, 6, H, W) from preprocess_image_for_rwkv7

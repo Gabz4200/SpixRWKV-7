@@ -44,10 +44,18 @@ _DEFAULT_CKPT = (
 
 
 def pil_to_balanced(pil_image: Image.Image, img_size: int) -> torch.Tensor:
-    """Convert PIL RGB to 6-channel balanced tensor for SpixRWKV-7 input."""
-    pil_image = pil_image.convert("RGB").resize(
-        (img_size, img_size), Image.Resampling.BILINEAR
-    )
+    """Convert PIL RGB to 6-channel balanced tensor for SpixRWKV-7 input.
+
+    Resizes so that height matches ``img_size`` (proportional width).
+    If ``img_size <= 0``, original resolution is preserved.
+    """
+    pil_image = pil_image.convert("RGB")
+    if img_size > 0:
+        orig_w, orig_h = pil_image.size
+        aspect = orig_w / orig_h
+        new_h = img_size
+        new_w = int(round(new_h * aspect))
+        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
     arr = np.array(pil_image, dtype=np.float32) / 255.0
     img_tensor = (
         torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)

@@ -103,9 +103,9 @@ def discover_ade20k_classes(
 # =====================================================================
 
 
-def build_label_map(sample: dict, img_size: int, class_map: dict) -> torch.Tensor:
+def build_label_map(sample: dict, height: int, width: int, class_map: dict) -> torch.Tensor:
     """(H, W) long tensor with compressed class indices or _IGNORE_INDEX."""
-    H, W = img_size, img_size
+    H, W = height, width
     label = torch.full((H, W), _IGNORE_INDEX, dtype=torch.long)
     for seg_pil, obj in zip(sample["segmentations"], sample["objects"]):
         compressed = class_map.get(obj["name_ndx"])
@@ -128,10 +128,18 @@ def build_label_map(sample: dict, img_size: int, class_map: dict) -> torch.Tenso
 
 
 def pil_to_balanced(pil_image: Image.Image, img_size: int) -> torch.Tensor:
-    """PIL RGB -> 6-channel balanced tensor for SpixRWKV-7 input."""
-    pil_image = pil_image.convert("RGB").resize(
-        (img_size, img_size), Image.Resampling.BILINEAR
-    )
+    """PIL RGB -> 6-channel balanced tensor for SpixRWKV-7 input.
+
+    Resizes so that height matches ``img_size`` (proportional width).
+    If ``img_size <= 0``, original resolution is preserved.
+    """
+    pil_image = pil_image.convert("RGB")
+    if img_size > 0:
+        orig_w, orig_h = pil_image.size
+        aspect = orig_w / orig_h
+        new_h = img_size
+        new_w = int(round(new_h * aspect))
+        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
     arr = np.array(pil_image, dtype=np.float32) / 255.0
     img_tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
     balanced = prepare_balanced_superpixel_features(
@@ -189,7 +197,8 @@ class ADE20KStreaming(IterableDataset):
 
         for sample in ds:
             img_tensor = pil_to_balanced(sample["image"], self.img_size)
-            label = build_label_map(sample, self.img_size, self.class_map)
+            _, _, H, W = img_tensor.shape
+            label = build_label_map(sample, H, W, self.class_map)
             yield img_tensor, label
 
 

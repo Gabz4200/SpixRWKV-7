@@ -30,7 +30,7 @@ def main():
     # 1. Preprocess image for the model
     x = preprocess_image_for_rwkv7(
         args.image_path,
-        target_size=(args.size, args.size),
+        img_size=args.size,
         include_alpha=True,
     ).to(device)
 
@@ -84,8 +84,12 @@ def main():
             .long()
         )
 
-    # 4. Prepare image for display
-    display_img = Image.open(args.image_path).convert("RGB").resize((args.size, args.size))
+    # 4. Prepare image for display (match actual model input size, keep aspect ratio)
+    display_img = Image.open(args.image_path).convert("RGB")
+    if args.size > 0:
+        orig_w, orig_h = display_img.size
+        aspect = orig_w / orig_h
+        display_img = display_img.resize((int(round(args.size * aspect)), args.size))
     display_np = np.array(display_img)
 
     labels_np = global_labels[0].cpu().numpy()

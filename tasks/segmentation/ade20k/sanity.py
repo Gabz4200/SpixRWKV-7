@@ -36,6 +36,7 @@ from torch.utils.data import DataLoader, IterableDataset
 
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
 from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
+from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
 
 # ---------------------------------------------------------------------------
@@ -102,9 +103,9 @@ def discover_ade20k_classes(
 # =====================================================================
 
 
-def build_label_map(sample: dict, img_size: int, class_map: dict) -> torch.Tensor:
+def build_label_map(sample: dict, height: int, width: int, class_map: dict) -> torch.Tensor:
     """Build label map: (H, W) long tensor with compressed indices or _IGNORE_INDEX."""
-    H, W = img_size, img_size
+    H, W = height, width
     label = torch.full((H, W), _IGNORE_INDEX, dtype=torch.long)
     for seg_pil, obj in zip(sample["segmentations"], sample["objects"]):
         raw_ndx = obj["name_ndx"]
@@ -128,51 +129,22 @@ def build_label_map(sample: dict, img_size: int, class_map: dict) -> torch.Tenso
 
 
 def pil_to_balanced(pil_image: Image.Image, img_size: int) -> torch.Tensor:
-    """PIL RGB -> 6-channel balanced tensor for SpixRWKV-7 input."""
-    pil_image = pil_image.convert("RGB").resize(
-        (img_size, img_size), Image.Resampling.BILINEAR
-    )
+    """PIL RGB -> 6-channel balanced tensor for SpixRWKV-7 input.
+
+    Resizes so that height matches ``img_size`` (proportional width).
+    If ``img_size <= 0``, original resolution is preserved.
+    """
+    pil_image = pil_image.convert("RGB")
+    if img_size > 0:
+        orig_w, orig_h = pil_image.size
+        aspect = orig_w / orig_h
+        new_h = img_size
+        new_w = int(round(new_h * aspect))
+        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
     arr = np.array(pil_image, dtype=np.float32) / 255.0
     img_tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
     balanced = prepare_balanced_superpixel_features(img_tensor, alpha=None, chroma_scale=2.5)
     return balanced.squeeze(0)
-
-
-# =====================================================================
-# Streaming dataset
-# =====================================================================
-
-
-class ADE20KStreaming(IterableDataset):
-    """Streaming ADE20K subset for sanity testing."""
-
-    def __init__(
-        self,
-        split: str = "train",
-        img_size: int = 64,
-        max_samples: int = 128,
-        shuffle_buffer: int = 100,
-        seed: int = 42,
-        class_map: dict | None = None,
-    ):
-        super().__init__()
-        self.img_size = img_size
-        self.max_samples = max_samples
-        self.shuffle_buffer = shuffle_buffer
-        self.seed = seed
-        self.split = split
-        self.class_map = class_map or {}
-
-    def __iter__(self):
-        ds = load_dataset("1aurent/ADE20K", split=self.split, streaming=True)
-        if self.shuffle_buffer > 0:
-            ds = ds.shuffle(buffer_size=self.shuffle_buffer, seed=self.seed)
-        ds = ds.take(self.max_samples)
-
-        for sample in ds:
-            img_tensor = pil_to_balanced(sample["image"], self.img_size)
-            label = build_label_map(sample, self.img_size, self.class_map)
-            yield img_tensor, label
 
 
 # =====================================================================
@@ -250,21 +222,47 @@ class ADE20KSegModel(nn.Module):
                 codebook_size=config.get("codebook_size", 1024),
                 downsample_factor=config.get("downsample_factor", 16),
             )
-        else:
-            self.backbone = _create_model(
+        elif model_type == "conv":
+            self.backbone = create_conv_vision_rwkv7(
                 img_size=config["img_size"],
                 embed_dims=config["embed_dims"],
                 num_heads=config["num_heads"],
                 depth=config["depth"],
-                num_superpixels=config["num_superpixels"],
-                drop_path_rate=config.get("drop_path_rate", 0.0),
-                scatter_output=True,
-                diff_slic_iters=config.get("diff_slic_iters", 1),
-                compactness=config.get("compactness", 0.5),
                 init_values=1e-5,
                 norm_layer="rmsnorm",
                 act_layer="swiglu",
+                out_indices=(config.get("out_indices", -1),),
+                num_superpixels=config["num_superpixels"],
+                scatter_output=config.get("scatter_output", True),
+                diff_slic_iters=config.get("diff_slic_iters", 1),
+                compactness=config.get("compactness", 0.5),
+                spixel_backend=config.get("spixel_backend", "diff_slic"),
+                use_attnres=config.get("use_attnres", True),
+                use_jit=config.get("use_jit", False),
+                conv_stem_channels=tuple(config.get("conv_stem_channels", [32, 64, 128])),
+                conv_stem_kernel_sizes=tuple(config.get("conv_stem_kernel_sizes", [3, 5, 5])),
+                conv_stem_strides=tuple(config.get("conv_stem_strides", [1, 2, 2])),
+                conv_stem_norm=config.get("conv_stem_norm", "batchnorm2d"),
+                conv_post_norm=config.get("conv_post_norm", "layernorm"),
             )
+        else:
+            kwargs = {
+                "img_size": config["img_size"],
+                "embed_dims": config["embed_dims"],
+                "num_heads": config["num_heads"],
+                "depth": config["depth"],
+                "num_superpixels": config["num_superpixels"],
+                "drop_path_rate": config.get("drop_path_rate", 0.0),
+                "scatter_output": True,
+                "diff_slic_iters": config.get("diff_slic_iters", 1),
+                "compactness": config.get("compactness", 0.5),
+                "init_values": 1e-5,
+                "norm_layer": "rmsnorm",
+                "act_layer": "swiglu",
+            }
+            if config.get("downsample_factor") is not None:
+                kwargs["downsample_factor"] = config["downsample_factor"]
+            self.backbone = _create_model(**kwargs)
         self.seg_head = SegHead(config["embed_dims"], num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -299,6 +297,60 @@ def pixel_accuracy(logits: torch.Tensor, targets: torch.Tensor) -> float:
 
 
 # =====================================================================
+# Streaming dataset
+# =====================================================================
+
+
+class ADE20KStreaming(IterableDataset):
+    """Streaming ADE20K dataset for segmentation sanity checks."""
+
+    def __init__(
+        self,
+        split: str = "train",
+        img_size: int = 64,
+        max_samples: int | None = None,
+        shuffle_buffer: int = 100,
+        seed: int = 42,
+        class_map: dict | None = None,
+    ):
+        super().__init__()
+        self.img_size = img_size
+        self.max_samples = max_samples
+        self.shuffle_buffer = shuffle_buffer
+        self.seed = seed
+        self.split = split
+        self.class_map = class_map or {}
+        self._len: int | None = None
+
+    def _get_len(self) -> int:
+        if self._len is None:
+            ds = load_dataset("1aurent/ADE20K", split=self.split, streaming=True)
+            counted = 0
+            for _ in ds:
+                counted += 1
+                if self.max_samples is not None and counted >= self.max_samples:
+                    break
+            self._len = counted
+        return self._len
+
+    def __len__(self) -> int:
+        return self._get_len()
+
+    def __iter__(self):
+        ds = load_dataset("1aurent/ADE20K", split=self.split, streaming=True)
+        if self.shuffle_buffer > 0:
+            ds = ds.shuffle(buffer_size=self.shuffle_buffer, seed=self.seed)
+        if self.max_samples is not None:
+            ds = ds.take(self.max_samples)
+
+        for sample in ds:
+            img_tensor = pil_to_balanced(sample["image"], self.img_size)
+            _, H, W = img_tensor.shape
+            label = build_label_map(sample, H, W, self.class_map)
+            yield img_tensor, label
+
+
+# =====================================================================
 # Main
 # =====================================================================
 
@@ -328,12 +380,25 @@ def main() -> None:
     parser.add_argument("--shuffle-buffer", type=int, default=100)
     parser.add_argument("--target-accuracy", type=float, default=0.0,
                         help="Stop early when pixel accuracy >= this")
-    parser.add_argument("--model-type", choices=["spix", "vq"], default="spix",
+    parser.add_argument("--model-type", choices=["spix", "vq", "conv"], default="spix",
                         help="Backbone type (default: spix)")
     parser.add_argument("--codebook-size", type=int, default=1024,
                         help="VQ codebook size")
     parser.add_argument("--downsample-factor", type=int, default=16,
                         help="VQ downsample factor")
+    parser.add_argument(
+        "--downsample-factors",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Downsample factors to sweep for spix backbone",
+    )
+    parser.add_argument(
+        "--compare-variants",
+        nargs="+",
+        default=None,
+        help="Run sanity overfit for spix/conv/vq and print a comparison table",
+    )
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -374,144 +439,194 @@ def main() -> None:
     NUM_CLASSES = len(class_map)
     unknown_count = 0
     print(f"  Found {NUM_CLASSES} unique classes in {args.num_train_images} train samples")
-    val_ds_check = load_dataset("1aurent/ADE20K", split="validation", streaming=True)
-    val_ds_check = val_ds_check.take(args.num_val_images)
-    for sample in val_ds_check:
-        for obj in sample["objects"]:
-            if obj["name_ndx"] not in class_map:
-                unknown_count += 1
     print(f"  Unknown classes in val set: {unknown_count} ")
     print()
 
-    # --- Datasets & DataLoaders ---
-    train_ds = ADE20KStreaming(
-        split="train", img_size=cfg["img_size"],
-        max_samples=args.num_train_images,
-        shuffle_buffer=args.shuffle_buffer, seed=args.seed,
-        class_map=class_map,
-    )
-    val_ds = ADE20KStreaming(
-        split="validation", img_size=cfg["img_size"],
-        max_samples=args.num_val_images,
-        shuffle_buffer=0, class_map=class_map,
-    )
+    def make_model(variant: str) -> nn.Module:
+        return ADE20KSegModel(cfg, NUM_CLASSES, model_type=variant).to(device)
 
-    train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, num_workers=args.num_workers,
-        pin_memory=True,
-    )
-    val_loader = DataLoader(
-        val_ds, batch_size=args.batch_size, num_workers=args.num_workers,
-        pin_memory=True,
-    )
-
-    # --- Model ---
-    model = ADE20KSegModel(cfg, NUM_CLASSES, model_type=args.model_type).to(device)
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"  Model params: {total_params:,} (trainable: {trainable:,})")
-    head_params = sum(p.numel() for p in model.seg_head.parameters())
-    print(f"  Seg head:      {head_params:,}  ({NUM_CLASSES} classes x {cfg['embed_dims']})")
-    print()
-
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
-    )
-    criterion = nn.CrossEntropyLoss(ignore_index=_IGNORE_INDEX)
-
-    # --- Training ---
-    epoch_times = []
-    epoch_losses = []
-    for epoch in range(1, args.epochs + 1):
-        model.train()
-        epoch_loss = 0.0
-        epoch_acc = 0.0
-        n_batches = 0
-        t0 = time.time()
-
-        for batch_idx, (inputs, targets) in enumerate(train_loader):
-            inputs, targets = inputs.to(device), targets.to(device)
-
-            optimizer.zero_grad(set_to_none=True)
-            logits = model(inputs)
-            loss = criterion(logits, targets)
-            if args.model_type == "vq":
-                q_loss = getattr(model.backbone, "_last_q_loss", None)
-                if q_loss is not None:
-                    loss = loss + q_loss
-
-            if torch.isnan(loss).item():
-                print(f"  E{epoch:02d} B{batch_idx+1:03d} loss=NaN -- skipping batch")
-                continue
-
-            loss.backward()
-            grad_norm = compute_grad_norm(model)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-            optimizer.step()
-
-            acc = pixel_accuracy(logits.detach(), targets)
-            epoch_loss += loss.item()
-            epoch_acc += acc
-            n_batches += 1
-
-            if (batch_idx + 1) % 5 == 0:
-                print(f"  E{epoch:02d} B{batch_idx+1:03d} | "
-                      f"loss={loss.item():.4f} | acc={acc*100:.1f}% | "
-                      f"grad_norm={grad_norm:.2f}")
-
-        # --- Validation ---
-        model.eval()
-        val_loss = 0.0
-        val_acc = 0.0
-        val_batches = 0
-        with torch.no_grad():
-            for inputs, targets in val_loader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                logits = model(inputs)
-                vloss = criterion(logits, targets)
-                if not torch.isnan(vloss).item():
-                    val_loss += vloss.item()
-                    val_acc += pixel_accuracy(logits, targets)
-                    val_batches += 1
-
-        elapsed = time.time() - t0
-        epoch_times.append(elapsed)
-
-        if n_batches > 0:
-            avg_loss = epoch_loss / n_batches
-            avg_acc = epoch_acc / n_batches
+    def train_variant(variant: str, df: Optional[float] = None) -> dict:
+        print("\n" + "-" * 72)
+        if df is not None:
+            print(f"Training variant: {variant} (downsample_factor={df})")
         else:
-            avg_loss = float("nan")
-            avg_acc = 0.0
-
-        epoch_losses.append(avg_loss)
-
-        if val_batches > 0:
-            val_loss /= val_batches
-            val_acc /= val_batches
-
-        print(
-            f"  E{epoch:02d}  | train_loss={avg_loss:.4f} train_acc={avg_acc*100:.1f}% | "
-            f"val_loss={val_loss:.4f} val_acc={val_acc*100:.1f}% | "
-            f"{elapsed:.0f}s"
+            print(f"Training variant: {variant}")
+        print("-" * 72)
+        train_ds = ADE20KStreaming(
+            split="train", img_size=cfg["img_size"],
+            max_samples=args.num_train_images,
+            shuffle_buffer=args.shuffle_buffer, seed=args.seed,
+            class_map=class_map,
+        )
+        val_ds = ADE20KStreaming(
+            split="validation", img_size=cfg["img_size"],
+            max_samples=args.num_val_images,
+            shuffle_buffer=0, class_map=class_map,
+        )
+        train_loader = DataLoader(
+            train_ds, batch_size=args.batch_size, num_workers=args.num_workers,
+            pin_memory=True,
+        )
+        val_loader = DataLoader(
+            val_ds, batch_size=args.batch_size, num_workers=args.num_workers,
+            pin_memory=True,
         )
 
-        if avg_loss < 0.1:
-            print("  >> Loss < 0.1 -- model successfully overfitting!")
+        model = make_model(variant)
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"  Model params: {total_params:,} (trainable: {trainable:,})")
+        head_params = sum(p.numel() for p in model.seg_head.parameters())
+        print(f"  Seg head:      {head_params:,}  ({NUM_CLASSES} classes x {cfg['embed_dims']})")
+        print()
 
-        if val_acc >= args.target_accuracy > 0:
-            print(f"  >> Target accuracy {args.target_accuracy*100:.0f}% reached!")
-            break
+        optimizer = torch.optim.AdamW(
+            model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+        )
+        criterion = nn.CrossEntropyLoss(ignore_index=_IGNORE_INDEX)
+
+        epoch_times = []
+        epoch_losses = []
+        best_val_loss = float("inf")
+        best_epoch = None
+        target_epoch = None
+
+        for epoch in range(1, args.epochs + 1):
+            model.train()
+            epoch_loss = 0.0
+            epoch_acc = 0.0
+            n_batches = 0
+            t0 = time.time()
+
+            for batch_idx, (inputs, targets) in enumerate(train_loader):
+                inputs, targets = inputs.to(device), targets.to(device)
+                optimizer.zero_grad(set_to_none=True)
+                logits = model(inputs)
+                loss = criterion(logits, targets)
+                if variant == "vq":
+                    q_loss = getattr(model.backbone, "_last_q_loss", None)
+                    if q_loss is not None:
+                        loss = loss + q_loss
+                if torch.isnan(loss).item():
+                    print(f"  E{epoch:02d} B{batch_idx+1:03d} loss=NaN -- skipping batch")
+                    continue
+
+                loss.backward()
+                grad_norm = compute_grad_norm(model)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+                optimizer.step()
+
+                acc = pixel_accuracy(logits.detach(), targets)
+                epoch_loss += loss.item()
+                epoch_acc += acc
+                n_batches += 1
+
+                if (batch_idx + 1) % 5 == 0:
+                    print(f"  E{epoch:02d} B{batch_idx+1:03d} | "
+                          f"loss={loss.item():.4f} | acc={acc*100:.1f}% | "
+                          f"grad_norm={grad_norm:.2f}")
+
+            # --- Validation ---
+            model.eval()
+            val_loss = 0.0
+            val_acc = 0.0
+            val_batches = 0
+            with torch.no_grad():
+                for inputs, targets in val_loader:
+                    inputs, targets = inputs.to(device), targets.to(device)
+                    logits = model(inputs)
+                    vloss = criterion(logits, targets)
+                    if torch.isfinite(vloss).item():
+                        val_loss += vloss.item()
+                        val_acc += pixel_accuracy(logits, targets)
+                        val_batches += 1
+
+            elapsed = time.time() - t0
+            epoch_times.append(elapsed)
+
+            avg_loss = epoch_loss / n_batches if n_batches > 0 else float("nan")
+            avg_acc = epoch_acc / n_batches if n_batches > 0 else 0.0
+            val_loss /= val_batches if val_batches > 0 else 1
+            val_acc /= val_batches if val_batches > 0 else 1
+            epoch_losses.append(avg_loss)
+
+            if avg_loss < best_val_loss:
+                best_val_loss = avg_loss
+                best_epoch = epoch
+            if avg_loss < 0.1 and target_epoch is None:
+                target_epoch = epoch
+
+            print(
+                f"  E{epoch:02d}  | train_loss={avg_loss:.4f} train_acc={avg_acc*100:.1f}% | "
+                f"val_loss={val_loss:.4f} val_acc={val_acc*100:.1f}% | "
+                f"{elapsed:.0f}s"
+            )
+            if avg_loss < 0.1:
+                print("  >> Loss < 0.1 -- model successfully overfitting!")
+            if val_acc >= args.target_accuracy > 0:
+                print(f"  >> Target accuracy {args.target_accuracy*100:.0f}% reached!")
+                break
+
+        avg_epoch = sum(epoch_times) / len(epoch_times) if epoch_times else 0.0
+        return {
+            "model_type": f"{variant} (df={df})" if df is not None else variant,
+            "total_params": total_params,
+            "best_val_loss": best_val_loss,
+            "best_epoch": best_epoch,
+            "target_epoch": target_epoch,
+            "final_loss": epoch_losses[-1] if epoch_losses else float("nan"),
+            "avg_epoch_s": avg_epoch,
+            "epochs_surfaced": len(epoch_losses),
+        }
+
+    variants = [args.model_type]
+    results = []
+    if args.compare_variants:
+        candidates = [v for v in args.compare_variants if v in {"spix", "conv", "vq"}]
+        if candidates:
+            variants = candidates
+
+    for variant in variants:
+        dfactors = args.downsample_factors if (args.downsample_factors is not None and variant == "spix") else [None]
+        for df in dfactors:
+            cfg["downsample_factor"] = df
+            results.append(train_variant(variant, df))
+
+    if len(results) > 1:
+        print("\n" + "=" * 72)
+        print("VARIANT COMPARISON")
+        print("=" * 72)
+        print(f"{'Variant':<10} {'Params':<12} {'BestEpoch':<10} {'BestValLoss':<12} {'AvgEpoch(s)':<12} {'FinalLoss':<12} {'TargetEpoch':<12}")
+        print("-" * 82)
+        for r in results:
+            print(f"{r['model_type']:<10} {r['total_params']:<12,} {str(r['best_epoch']):<10} {r['best_val_loss']:<12.4f} {r['avg_epoch_s']:<12.1f} {r['final_loss']:<12.4f} {str(r['target_epoch']):<12}")
+        best = min(results, key=lambda r: r["best_val_loss"])
+        print(f"\nBest validation loss: {best['model_type']} at epoch {best['best_epoch']} with loss {best['best_val_loss']:.4f}")
+        print("  - Lower best_val_loss -> this variant fit the subset faster")
+        print("  - Earlier best_epoch  -> faster convergence on this task/size")
+        print("  - Earlier target_epoch -> quicker escape from high-loss plateau")
 
     print("=" * 72)
     print("Done.")
-    avg_epoch = sum(epoch_times) / len(epoch_times)
-    print(f"  Avg epoch time: {avg_epoch:.0f}s")
-    print(f"  Loss trend: train={epoch_losses[0] if epoch_losses else 0:.4f} -> ...")
+    if results:
+        print(f"  Variants run: {', '.join(r['model_type'] for r in results)}")
     print("  - Decreasing to ~0 -> model CAN overfit (architecture passes)")
     print("  - Stagnant / NaN    -> architecture or training issue")
     print("=" * 72)
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    has_downsample = False
+    for i, arg in enumerate(sys.argv):
+        if arg == "--downsample-factors":
+            has_downsample = True
+            break
+    if has_downsample:
+        import os
+        from spixrwkv7.utils import redirect_stdout_tee
+        os.makedirs("results", exist_ok=True)
+        with redirect_stdout_tee("results/ade20k_sanity_downsample.txt"):
+            main()
+    else:
+        main()

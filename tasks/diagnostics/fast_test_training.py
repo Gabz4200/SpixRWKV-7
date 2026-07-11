@@ -28,6 +28,7 @@ if __name__ == "__main__":
 
 from spixrwkv7 import ClassificationHead
 from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
+from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
 
 # ---------------------------------------------------------------------------
@@ -95,12 +96,14 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--use-attnres", action="store_true", help="Enable Attention Residuals")
-    parser.add_argument("--model-type", choices=["spix", "vq"], default="spix",
+    parser.add_argument("--model-type", choices=["spix", "vq", "conv"], default="spix",
                         help="Backbone type (default: spix)")
     parser.add_argument("--codebook-size", type=int, default=1024,
                         help="VQ codebook size")
     parser.add_argument("--downsample-factor", type=int, default=16,
                         help="VQ downsample factor")
+    parser.add_argument("--downsample-factors", type=float, nargs="+", default=[1.0],
+                        help="Downsample factors for spix sweep")
     parser.add_argument("--latent-dim", type=int, default=None,
                         help="VQ latent dimension (default: embed_dims)")
     parser.add_argument("--num-res-blocks", type=int, default=2,
@@ -109,210 +112,243 @@ def main() -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ---- Seed everything ----
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-    random.seed(args.seed)
-    if device.type == "cuda":
-        torch.cuda.manual_seed_all(args.seed)
-
     # ------------------------------------------------------------------
-    # Model
-    # ------------------------------------------------------------------
-    if args.model_type == "vq":
-        backbone = create_vq_rwkv7(
-            img_size=args.img_size,
-            embed_dims=args.embed_dims,
-            num_heads=args.num_heads,
-            depth=args.depth,
-            init_values=_INIT_VALUES,
-            final_norm=True,
-            out_indices=[args.depth - 1],
-            with_cls_token=False,
-            output_cls_token=False,
-            scatter_output=False,
-            drop_path_rate=_DROP_PATH,
-            codebook_size=args.codebook_size,
-            downsample_factor=args.downsample_factor,
-            latent_dim=args.latent_dim,
-            num_res_blocks=args.num_res_blocks,
-            norm_layer="rmsnorm",
-            act_layer="swiglu",
-            use_attnres=args.use_attnres,
-        ).to(device)
-        backbone._init_weights()
-    else:
-        backbone = _create_model(
-            img_size=args.img_size,
-            embed_dims=args.embed_dims,
-            num_heads=args.num_heads,
-            depth=args.depth,
-            init_values=_INIT_VALUES,
-            final_norm=True,
-            out_indices=[args.depth - 1],  # only last layer
-            with_cls_token=False,
-            output_cls_token=False,
-            scatter_output=False,
-            num_superpixels=args.num_superpixels,
-            diff_slic_iters=1,  # single iter — fast enough to check convergence
-            compactness=0.5,
-            drop_path_rate=_DROP_PATH,
-            norm_layer="rmsnorm",
-            act_layer="swiglu",
-            use_attnres=args.use_attnres,
-        ).to(device)
-
-        # Re-init weights for reproducibility
-        backbone._init_weights()
-
-    head = ClassificationHead(
-        embed_dims=args.embed_dims, num_classes=args.num_classes
-    ).to(device)
-
-    # ------------------------------------------------------------------
-    # Optimizer
-    # ------------------------------------------------------------------
-    params = (
-        list(backbone.parameters()) + list(head.parameters())
-    )
-    optimizer = torch.optim.AdamW(
-        params, lr=args.lr, weight_decay=args.weight_decay
-    )
-
-    # ------------------------------------------------------------------
-    # Data — one batch
+    # Data — one batch (shared across sweep runs)
     # ------------------------------------------------------------------
     x, y = synth_batch(
         args.batch_size, args.num_classes, args.img_size, device
     )
 
-    # ------------------------------------------------------------------
-    # Header
-    # ------------------------------------------------------------------
-    d = device.type.upper()
-    if device.type == "cuda":
-        d += f" ({torch.cuda.get_device_name(0)})"
-    total_params = sum(p.numel() for p in params)
-    train_params = sum(p.numel() for p in params if p.requires_grad)
+    factors = args.downsample_factors if args.model_type == "spix" else [1.0]
 
-    print("=" * 72)
-    print("  SpixRWKV-7 — Fast Convergence Test (single-batch overfit)")
-    print("=" * 72)
-    print(f"  Device         {d}")
-    print(f"  Batch size     {args.batch_size}")
-    print(f"  Image size     {args.img_size}x{args.img_size}")
-    print(f"  Classes        {args.num_classes}")
-    print(f"  Embed dims     {args.embed_dims}")
-    print(f"  Heads          {args.num_heads}")
-    print(f"  Depth          {args.depth}")
-    print(f"  Superpixels    {args.num_superpixels}")
-    print(f"  Total params   {total_params:,}")
-    print(f"  Train params   {train_params:,}")
-    print(f"  Optimizer      AdamW (lr={args.lr}, wd={args.weight_decay})")
-    print(f"  Max steps      {args.max_steps}")
-    print(f"  Target acc     {args.target_accuracy:.0%}")
-    print("-" * 72)
-    print(f"  {'Step':>5}  {'Loss':>8}  {'Acc':>6}  {'GradNorm':>8}"
-          f"  {'Time/step':>9}")
-    print("-" * 72)
+    for df in factors:
+        if args.model_type == "spix":
+            print(f"\n=== Running Spix model with downsample_factor = {df} ===")
 
-    # ------------------------------------------------------------------
-    # Training loop
-    # ------------------------------------------------------------------
-    best_acc = 0.0
-    losses: list[float] = []
-    accs: list[float] = []
-    t0 = time.perf_counter()
+        # ---- Seed everything ----
+        torch.manual_seed(args.seed)
+        np.random.seed(args.seed)
+        random.seed(args.seed)
+        if device.type == "cuda":
+            torch.cuda.manual_seed_all(args.seed)
 
-    for step in range(1, args.max_steps + 1):
-        step_t0 = time.perf_counter()
-
-        backbone.train()
-        head.train()
-        optimizer.zero_grad(set_to_none=True)
-
-        # Forward
-        outs = backbone(x)          # tuple of tensors, one per out_indices
-        feat = outs[0]              # (B, embed_dims, h_s, w_s)
-        if getattr(backbone, "use_attnres", False):
-            logits = head(
-                feat,
-                attnres_history=getattr(backbone, "last_attnres_history_patches", None),
-                project_fn=getattr(backbone, "last_project_fn", None)
-            )
-        else:
-            logits = head(feat)         # (B, num_classes)
-        loss = F.cross_entropy(logits, y)
+        # ------------------------------------------------------------------
+        # Model
+        # ------------------------------------------------------------------
         if args.model_type == "vq":
-            q_loss = getattr(backbone, "_last_q_loss", None)
-            if q_loss is not None:
-                loss = loss + q_loss
+            backbone = create_vq_rwkv7(
+                img_size=args.img_size,
+                embed_dims=args.embed_dims,
+                num_heads=args.num_heads,
+                depth=args.depth,
+                init_values=_INIT_VALUES,
+                final_norm=True,
+                out_indices=[args.depth - 1],
+                with_cls_token=False,
+                output_cls_token=False,
+                scatter_output=False,
+                drop_path_rate=_DROP_PATH,
+                codebook_size=args.codebook_size,
+                downsample_factor=args.downsample_factor,
+                latent_dim=args.latent_dim,
+                num_res_blocks=args.num_res_blocks,
+                norm_layer="rmsnorm",
+                act_layer="swiglu",
+                use_attnres=args.use_attnres,
+            ).to(device)
+            backbone._init_weights()
+        elif args.model_type == "conv":
+            backbone = create_conv_vision_rwkv7(
+                img_size=args.img_size,
+                embed_dims=args.embed_dims,
+                num_heads=args.num_heads,
+                depth=args.depth,
+                init_values=_INIT_VALUES,
+                final_norm=True,
+                out_indices=[args.depth - 1],
+                num_superpixels=args.num_superpixels,
+                scatter_output=False,
+                diff_slic_iters=1,
+                compactness=0.5,
+                norm_layer="rmsnorm",
+                act_layer="swiglu",
+                spixel_backend="diff_slic",
+                use_attnres=args.use_attnres,
+                use_jit=False,
+                conv_stem_channels=(32, 64, 128),
+                conv_stem_kernel_sizes=(3, 5, 5),
+                conv_stem_strides=(1, 2, 2),
+                conv_stem_norm="batchnorm2d",
+                conv_post_norm="layernorm",
+            ).to(device)
+            backbone._init_weights()
+        else:
+            backbone = _create_model(
+                img_size=args.img_size,
+                embed_dims=args.embed_dims,
+                num_heads=args.num_heads,
+                depth=args.depth,
+                init_values=_INIT_VALUES,
+                final_norm=True,
+                out_indices=[args.depth - 1],  # only last layer
+                with_cls_token=False,
+                output_cls_token=False,
+                scatter_output=False,
+                num_superpixels=args.num_superpixels,
+                diff_slic_iters=1,  # single iter — fast enough to check convergence
+                compactness=0.5,
+                drop_path_rate=_DROP_PATH,
+                norm_layer="rmsnorm",
+                act_layer="swiglu",
+                use_attnres=args.use_attnres,
+                downsample_factor=df,
+            ).to(device)
 
-        # Backward
-        loss.backward()
-        grad_norm = compute_grad_norm(backbone) + compute_grad_norm(head)
-        torch.nn.utils.clip_grad_norm_(params, max_norm=10.0)
-        optimizer.step()
+            # Re-init weights for reproducibility
+            backbone._init_weights()
 
-        acc = accuracy(logits, y)
-        losses.append(loss.item())
-        accs.append(acc)
-        best_acc = max(best_acc, acc)
+        head = ClassificationHead(
+            embed_dims=args.embed_dims, num_classes=args.num_classes
+        ).to(device)
 
-        step_time = time.perf_counter() - step_t0
-
-        if step % args.log_interval == 0 or step == 1:
-            print(f"  {step:>5}  {loss.item():>8.4f}  {acc:>5.1f}%"
-                  f"  {grad_norm:>8.2f}  {step_time*1e3:>8.1f}ms")
-
-        if acc >= args.target_accuracy * 100.0:
-            print(f"\n  >>> Target accuracy {args.target_accuracy:.0%} reached"
-                  f" at step {step}.")
-            break
-
-    elapsed = time.perf_counter() - t0
-
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
-    print("=" * 72)
-    print("  Summary")
-    print("=" * 72)
-    total_time_str = f"  Total time        {elapsed:.1f}s"
-    print(total_time_str)
-    print(f"  Steps run         {len(losses)}")
-    if losses:
-        print(f"  Final loss        {losses[-1]:.6f}")
-    if accs:
-        print(f"  Final accuracy    {accs[-1]:.1f}%")
-    print(f"  Best accuracy     {best_acc:.1f}%")
-    print("  Steps to 90%      ", end="")
-    try:
-        print(next(i + 1 for i, a in enumerate(accs) if a >= 90.0))
-    except StopIteration:
-        print("not reached")
-    print("  Steps to 95%      ", end="")
-    try:
-        print(next(i + 1 for i, a in enumerate(accs) if a >= 95.0))
-    except StopIteration:
-        print("not reached")
-
-    if best_acc >= args.target_accuracy * 100.0:
-        print("\n  RESULT: PASS — model overfits the batch (convergence OK)")
-    else:
-        print(
-            f"\n  RESULT: FAIL — best accuracy {best_acc:.1f}% < "
-            f"{args.target_accuracy:.0%} target."
+        # ------------------------------------------------------------------
+        # Optimizer
+        # ------------------------------------------------------------------
+        params = (
+            list(backbone.parameters()) + list(head.parameters())
         )
-        print("  Possible issues: bug in architecture, bad LR,"
-              " optimization setup.")
+        optimizer = torch.optim.AdamW(
+            params, lr=args.lr, weight_decay=args.weight_decay
+        )
 
-    print("=" * 72)
+        # ------------------------------------------------------------------
+        # Header
+        # ------------------------------------------------------------------
+        d = device.type.upper()
+        if device.type == "cuda":
+            d += f" ({torch.cuda.get_device_name(0)})"
+        total_params = sum(p.numel() for p in params)
+        train_params = sum(p.numel() for p in params if p.requires_grad)
+
+        print("=" * 72)
+        print("  SpixRWKV-7 — Fast Convergence Test (single-batch overfit)")
+        print("=" * 72)
+        print(f"  Device         {d}")
+        print(f"  Batch size     {args.batch_size}")
+        print(f"  Image size     {args.img_size}x{args.img_size}")
+        print(f"  Classes        {args.num_classes}")
+        print(f"  Embed dims     {args.embed_dims}")
+        print(f"  Heads          {args.num_heads}")
+        print(f"  Depth          {args.depth}")
+        print(f"  Superpixels    {args.num_superpixels}")
+        print(f"  Downsample F   {df if args.model_type == 'spix' else args.downsample_factor}")
+        print(f"  Total params   {total_params:,}")
+        print(f"  Train params   {train_params:,}")
+        print(f"  Optimizer      AdamW (lr={args.lr}, wd={args.weight_decay})")
+        print(f"  Max steps      {args.max_steps}")
+        print(f"  Target acc     {args.target_accuracy:.0%}")
+        print("-" * 72)
+        print(f"  {'Step':>5}  {'Loss':>8}  {'Acc':>6}  {'GradNorm':>8}"
+              f"  {'Time/step':>9}")
+        print("-" * 72)
+
+        # ------------------------------------------------------------------
+        # Training loop
+        # ------------------------------------------------------------------
+        best_acc = 0.0
+        losses: list[float] = []
+        accs: list[float] = []
+        t0 = time.perf_counter()
+
+        for step in range(1, args.max_steps + 1):
+            step_t0 = time.perf_counter()
+
+            backbone.train()
+            head.train()
+            optimizer.zero_grad(set_to_none=True)
+
+            # Forward
+            outs = backbone(x)          # tuple of tensors, one per out_indices
+            feat = outs[0]              # (B, embed_dims, h_s, w_s)
+            if getattr(backbone, "use_attnres", False):
+                logits = head(
+                    feat,
+                    attnres_history=getattr(backbone, "last_attnres_history_patches", None),
+                    project_fn=getattr(backbone, "last_project_fn", None)
+                )
+            else:
+                logits = head(feat)         # (B, num_classes)
+            loss = F.cross_entropy(logits, y)
+            if args.model_type == "vq":
+                q_loss = getattr(backbone, "_last_q_loss", None)
+                if q_loss is not None:
+                    loss = loss + q_loss
+
+            # Backward
+            loss.backward()
+            grad_norm = compute_grad_norm(backbone) + compute_grad_norm(head)
+            torch.nn.utils.clip_grad_norm_(params, max_norm=10.0)
+            optimizer.step()
+
+            acc = accuracy(logits, y)
+            losses.append(loss.item())
+            accs.append(acc)
+            best_acc = max(best_acc, acc)
+
+            step_time = time.perf_counter() - step_t0
+
+            if step % args.log_interval == 0 or step == 1:
+                print(f"  {step:>5}  {loss.item():>8.4f}  {acc:>5.1f}%"
+                      f"  {grad_norm:>8.2f}  {step_time*1e3:>8.1f}ms")
+
+            if acc >= args.target_accuracy * 100.0:
+                print(f"\n  >>> Target accuracy {args.target_accuracy:.0%} reached"
+                      f" at step {step}.")
+                break
+
+        elapsed = time.perf_counter() - t0
+
+        # ------------------------------------------------------------------
+        # Summary
+        # ------------------------------------------------------------------
+        print("=" * 72)
+        print("  Summary")
+        print("=" * 72)
+        total_time_str = f"  Total time        {elapsed:.1f}s"
+        print(total_time_str)
+        print(f"  Steps run         {len(losses)}")
+        if losses:
+            print(f"  Final loss        {losses[-1]:.6f}")
+        if accs:
+            print(f"  Final accuracy    {accs[-1]:.1f}%")
+        print(f"  Best accuracy     {best_acc:.1f}%")
+        print("  Steps to 90%      ", end="")
+        try:
+            print(next(i + 1 for i, a in enumerate(accs) if a >= 90.0))
+        except StopIteration:
+            print("not reached")
+        print("  Steps to 95%      ", end="")
+        try:
+            print(next(i + 1 for i, a in enumerate(accs) if a >= 95.0))
+        except StopIteration:
+            print("not reached")
+
+        if best_acc >= args.target_accuracy * 100.0:
+            print("\n  RESULT: PASS — model overfits the batch (convergence OK)")
+        else:
+            print(
+                f"\n  RESULT: FAIL — best accuracy {best_acc:.1f}% < "
+                f"{args.target_accuracy:.0%} target."
+            )
+            print("  Possible issues: bug in architecture, bad LR,"
+                  " optimization setup.")
+
+        print("=" * 72)
 
 
 if __name__ == "__main__":
     from spixrwkv7.utils import redirect_stdout_tee
     os.makedirs('results', exist_ok=True)
-    with redirect_stdout_tee('results/fast_test_training.txt'):
+    with redirect_stdout_tee('results/fast_test_training_downsample.txt'):
         main()
-    print('Results saved to results/fast_test_training.txt')
+    print('Results saved to results/fast_test_training_downsample.txt')

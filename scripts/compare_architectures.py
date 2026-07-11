@@ -10,11 +10,12 @@ faster relative to ViT's quadratic attention.
 """
 
 import argparse
+import inspect
 import os
 import time
 import tracemalloc
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -22,6 +23,7 @@ import yaml
 
 from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
+from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -202,11 +204,17 @@ def benchmark_rwkv_components(
     # Time tokenizer separately
     tokenizer_times = []
     tokenizer = getattr(model, "tokenizer", None)
+    conv_stem = getattr(model, "conv_stem", None)
     if tokenizer is not None:
         with torch.no_grad():
+            # Conv model tokenizer needs both raw image and stem features
+            x_feat = conv_stem(input_tensor) if conv_stem is not None else None
             for _ in range(timed_runs):
                 start = time.perf_counter()
-                _ = tokenizer(input_tensor)
+                if conv_stem is not None:
+                    _ = tokenizer(input_tensor, x_feat)
+                else:
+                    _ = tokenizer(input_tensor)
                 if device == "cuda":
                     torch.cuda.synchronize()
                 end = time.perf_counter()
@@ -241,56 +249,63 @@ def create_dummy_input(img_size: int, channels: int = 3, batch_size: int = 1) ->
     return torch.randn(batch_size, channels, img_size, img_size)
 
 
-def run_size_comparison(
-    sizes: List[str],
-    config_dir: Path,
-    device: str,
-    warmup_runs: int,
-    timed_runs: int,
-    batch_size: int,
+def _build_rwkv(
+    model_type: str,
+    size: str,
+    config: Dict[str, Any],
+    img_size: int,
     use_parallel: bool = False,
     hard_mode: bool = False,
-    model_type: str = "spix",
-) -> List[Dict[str, Any]]:
-    """Run comparison across model sizes at their configured image resolutions."""
-    results = []
+    downsample_factor: Optional[float] = None,
+):
+    embed_dims = config["embed_dims"]
+    depth = config["depth"]
+    num_heads = config["num_heads"]
+    num_superpixels = config.get("num_superpixels", 0)
 
-    for size in sizes:
-        config_path = config_dir / f"{size}.yaml"
-        config = load_config(str(config_path))
-
-        img_size = 512
-        embed_dims = config["embed_dims"]
-        depth = config["depth"]
-        num_heads = config["num_heads"]
-        num_superpixels = config["num_superpixels"]
-
-        print(f"\n--- {size.upper()} Config ---")
-        print(f"  img_size: {img_size}")
-        print(f"  embed_dims: {embed_dims}")
-        print(f"  depth: {depth}")
-        print(f"  num_heads: {num_heads}")
-        print(f"  num_superpixels: {num_superpixels}")
-
-        # Create Vision RWKV-7 model (optimized if available) with RMSNorm + SwiGLU
-        if model_type == "vq":
-            rwkv_model = create_vq_rwkv7(
-                img_size=img_size,
-                embed_dims=embed_dims,
-                num_heads=num_heads,
-                depth=depth,
-                init_values=config.get("init_values", 1e-5),
-                final_norm=config.get("final_norm", True),
-                out_indices=config.get("out_indices", [-1]),
-                scatter_output=config.get("scatter_output", True),
-                drop_path_rate=config.get("drop_path_rate", 0.0),
-                codebook_size=config.get("codebook_size", 1024),
-                downsample_factor=config.get("downsample_factor", 16),
-                norm_layer=config.get("norm_layer", "layernorm"),
-                act_layer=config.get("act_layer", "relu2"),
-            )
-        else:
-            rwkv_model = _create_model(
+    if model_type == "vq":
+        return create_vq_rwkv7(
+            img_size=img_size,
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            depth=depth,
+            init_values=config.get("init_values", 1e-5),
+            final_norm=config.get("final_norm", True),
+            out_indices=config.get("out_indices", [-1]),
+            scatter_output=config.get("scatter_output", True),
+            drop_path_rate=config.get("drop_path_rate", 0.0),
+            codebook_size=config.get("codebook_size", 1024),
+            downsample_factor=config.get("downsample_factor", 16),
+            norm_layer=config.get("norm_layer", "layernorm"),
+            act_layer=config.get("act_layer", "relu2"),
+        )
+    if model_type == "conv":
+        return create_conv_vision_rwkv7(
+            img_size=img_size,
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            depth=depth,
+            init_values=config.get("init_values", 1e-5),
+            final_norm=config.get("final_norm", True),
+            out_indices=config.get("out_indices", [-1]),
+            num_superpixels=num_superpixels,
+            scatter_output=config.get("scatter_output", True),
+            diff_slic_iters=config.get("diff_slic_iters", 5),
+            compactness=config.get("compactness", 0.5),
+            norm_layer=config.get("norm_layer", "layernorm"),
+            act_layer=config.get("act_layer", "relu2"),
+            spixel_backend=config.get("spixel_backend", "diff_slic"),
+            use_jit=config.get("use_jit", False),
+            conv_stem_channels=tuple(config.get("conv_stem_channels", [32, 64, 128])),
+            conv_stem_kernel_sizes=tuple(config.get("conv_stem_kernel_sizes", [3, 5, 5])),
+            conv_stem_strides=tuple(config.get("conv_stem_strides", [1, 2, 2])),
+            conv_stem_norm=config.get("conv_stem_norm", "batchnorm2d"),
+            conv_post_norm=config.get("conv_post_norm", "layernorm"),
+        )
+    if downsample_factor is None:
+        downsample_factor = config.get("downsample_factor", 16)
+    if model_type == "spix":
+        kwargs = dict(
             img_size=img_size,
             embed_dims=embed_dims,
             num_heads=num_heads,
@@ -306,78 +321,117 @@ def run_size_comparison(
             act_layer=config.get("act_layer", "relu2"),
             use_parallel=use_parallel,
         )
-        # Enable hard mode for diffSLIC tokenizer (seeds-revised style)
-        if hard_mode and model_type != "vq":
-            tokenizer = getattr(rwkv_model, "tokenizer", None)
-            if tokenizer is not None:
-                setattr(tokenizer, "mode", "hard")
-                diff_slic = getattr(tokenizer, "diff_slic", None)
-                if diff_slic is not None:
-                    setattr(diff_slic, "hard_mode", True)
-            print("  Using hard diffSLIC mode (seeds-revised)")
-        if use_parallel and model_type != "vq":
-            print("  Using parallel RWKV-7 scan")
+        if downsample_factor is not None:
+            sig = inspect.signature(_create_model)
+            if "downsample_factor" in sig.parameters:
+                val = int(downsample_factor) if downsample_factor == int(downsample_factor) else downsample_factor
+                kwargs["downsample_factor"] = val
+        return _create_model(**kwargs)
 
-        rwkv_params = count_parameters(rwkv_model)
-        print(f"  Vision RWKV-7 params: {rwkv_params / 1e6:.2f}M")
 
-        # Create ViT model
-        vit_model = get_vit_model(size, img_size)
-        vit_params = count_parameters(vit_model)
-        print(f"  ViT params: {vit_params / 1e6:.2f}M")
+def _benchmark_variant(
+    model_type: str, size: str, config: Dict[str, Any], img_size: int,
+    device: str, warmup_runs: int, timed_runs: int, batch_size: int,
+    use_parallel: bool = False, hard_mode: bool = False,
+    downsample_factor: Optional[float] = None,
+) -> Dict[str, Any]:
+    model = _build_rwkv(
+        model_type, size, config, img_size,
+        use_parallel=use_parallel, hard_mode=hard_mode,
+        downsample_factor=downsample_factor,
+    )
+    if hard_mode and model_type not in ("vq", "conv"):
+        tokenizer = getattr(model, "tokenizer", None)
+        if tokenizer is not None:
+            setattr(tokenizer, "mode", "hard")
+            diff_slic = getattr(tokenizer, "diff_slic", None)
+            if diff_slic is not None:
+                setattr(diff_slic, "hard_mode", True)
+    if use_parallel and model_type not in ("vq", "conv"):
+        print("    Using parallel RWKV-7 scan")
 
-        # Create input tensors
-        rwkv_input = create_dummy_input(img_size, channels=6, batch_size=batch_size)
-        vit_input = create_dummy_input(img_size, channels=3, batch_size=batch_size)
+    rwkv_params = count_parameters(model)
+    vit_model = get_vit_model(size, img_size)
+    vit_params = count_parameters(vit_model)
+    rwkv_input = create_dummy_input(img_size, channels=6, batch_size=batch_size)
+    vit_input = create_dummy_input(img_size, channels=3, batch_size=batch_size)
+    rwkv_mem = get_memory_usage(model, rwkv_input)
+    vit_mem = get_memory_usage(vit_model, vit_input)
+    rwkv_metrics = benchmark_rwkv_components(model, rwkv_input, warmup_runs, timed_runs, device)
+    vit_metrics = benchmark_model(vit_model, vit_input, warmup_runs, timed_runs, device)
+    speedup = vit_metrics["avg_time_ms"] / rwkv_metrics["avg_time_ms"]
+    result = {
+        "size": size,
+        "model_type": model_type,
+        "img_size": img_size,
+        "rwkv_params": rwkv_params,
+        "vit_params": vit_params,
+        "rwkv_time": rwkv_metrics["avg_time_ms"],
+        "rwkv_tokenizer": rwkv_metrics["tokenizer_time_ms"],
+        "rwkv_backbone": rwkv_metrics["backbone_time_ms"],
+        "vit_time": vit_metrics["avg_time_ms"],
+        "speedup": speedup,
+        "rwkv_mem_mb": rwkv_mem,
+        "vit_mem_mb": vit_mem,
+    }
+    if downsample_factor is not None:
+        result["downsample_factor"] = downsample_factor
+    del model, vit_model, rwkv_input, vit_input
+    if device == "cuda":
+        torch.cuda.empty_cache()
+    return result
 
-        # Memory usage
-        rwkv_mem = get_memory_usage(rwkv_model, rwkv_input)
-        vit_mem = get_memory_usage(vit_model, vit_input)
-        print(f"  Vision RWKV-7 peak memory: {rwkv_mem:.2f}MB")
-        print(f"  ViT peak memory: {vit_mem:.2f}MB")
 
-        # Benchmark Vision RWKV-7 with component breakdown
-        print("\n  Benchmarking Vision RWKV-7...")
-        rwkv_metrics = benchmark_rwkv_components(
-            rwkv_model, rwkv_input, warmup_runs, timed_runs, device
-        )
-        print(f"    Total: {rwkv_metrics['avg_time_ms']:.2f}ms")
-        print(f"    diffSLIC (tokenizer): {rwkv_metrics['tokenizer_time_ms']:.2f}ms")
-        print(f"    Backbone (recurrent): {rwkv_metrics['backbone_time_ms']:.2f}ms")
+def run_size_comparison(
+    sizes: List[str],
+    config_dir: Path,
+    device: str,
+    warmup_runs: int,
+    timed_runs: int,
+    batch_size: int,
+    use_parallel: bool = False,
+    hard_mode: bool = False,
+    model_type: str = "spix",
+    img_size: int = 512,
+    compare_variants: Optional[List[str]] = None,
+    downsample_factors: Optional[List[float]] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Run comparison across model sizes at a given image height.
 
-        # Benchmark ViT
-        print("  Benchmarking ViT...")
-        vit_metrics = benchmark_model(
-            vit_model, vit_input, warmup_runs, timed_runs, device
-        )
-        print(f"    Total: {vit_metrics['avg_time_ms']:.2f}ms")
+    Returns ``(results, variant_results)`` where ``results`` preserves the
+    original ViT-vs-RWKV behavior for ``model_type``, and ``variant_results``
+    contains one entry per ``(size, variant)`` when ``compare_variants`` is set.
+    """
+    results: List[Dict[str, Any]] = []
+    variant_results: List[Dict[str, Any]] = []
+    variants = [model_type]
+    if compare_variants:
+        variants = [v for v in compare_variants if v in {"spix", "conv", "vq"}]
+        if not variants:
+            variants = [model_type]
 
-        speedup = vit_metrics["avg_time_ms"] / rwkv_metrics["avg_time_ms"]
-        print(f"\n  Speed ratio (ViT/RWKV-7): {speedup:.2f}x")
-        if speedup > 1:
-            print(f"    Vision RWKV-7 is {speedup:.2f}x FASTER than ViT")
-        else:
-            print(f"    ViT is {1/speedup:.2f}x FASTER than Vision RWKV-7")
+    if downsample_factors is None:
+        downsample_factors = [1.0]
 
-        results.append({
-            "size": size,
-            "img_size": img_size,
-            "rwkv_params": rwkv_params,
-            "vit_params": vit_params,
-            "rwkv_time": rwkv_metrics["avg_time_ms"],
-            "rwkv_tokenizer": rwkv_metrics["tokenizer_time_ms"],
-            "rwkv_backbone": rwkv_metrics["backbone_time_ms"],
-            "vit_time": vit_metrics["avg_time_ms"],
-            "speedup": speedup,
-            "rwkv_mem_mb": rwkv_mem,
-            "vit_mem_mb": vit_mem,
-        })
+    for size in sizes:
+        for factor in downsample_factors:
+            run_variants = [v for v in variants if v == "spix" or factor == downsample_factors[0]]
+            if not run_variants:
+                continue
+            print(f"\n--- {size.upper()} (factor={factor}) ---")
+            for variant in run_variants:
+                config_path = config_dir / (f"conv_{size}.yaml" if variant == "conv" else f"{size}.yaml")
+                config = load_config(str(config_path))
+                entry = _benchmark_variant(
+                    variant, size, config, img_size, device, warmup_runs, timed_runs,
+                    batch_size, use_parallel=use_parallel, hard_mode=hard_mode,
+                    downsample_factor=factor,
+                )
+                variant_results.append(entry)
+                if variant == model_type:
+                    results.append(entry)
 
-        del rwkv_model, vit_model, rwkv_input, vit_input
-        if device == "cuda":
-            torch.cuda.empty_cache()
-
-    return results
+    return results, variant_results
 
 
 def run_resolution_sweep(
@@ -397,7 +451,8 @@ def run_resolution_sweep(
     print(f"{'=' * 70}")
 
     config_dir = Path("configs/model")
-    config = load_config(str(config_dir / f"{size}.yaml"))
+    config_path = config_dir / f"{size}.yaml" if model_type != "conv" else config_dir / f"conv_{size}.yaml"
+    config = load_config(str(config_path))
 
     embed_dims = config["embed_dims"]
     depth = config["depth"]
@@ -429,6 +484,29 @@ def run_resolution_sweep(
                 norm_layer=config.get("norm_layer", "layernorm"),
                 act_layer=config.get("act_layer", "relu2"),
             )
+        elif model_type == "conv":
+            rwkv_model = create_conv_vision_rwkv7(
+                img_size=img_size,
+                embed_dims=embed_dims,
+                num_heads=num_heads,
+                depth=depth,
+                init_values=config.get("init_values", 1e-5),
+                final_norm=config.get("final_norm", True),
+                out_indices=config.get("out_indices", [-1]),
+                num_superpixels=num_superpixels,
+                scatter_output=config.get("scatter_output", True),
+                diff_slic_iters=config.get("diff_slic_iters", 5),
+                compactness=config.get("compactness", 0.5),
+                norm_layer=config.get("norm_layer", "layernorm"),
+                act_layer=config.get("act_layer", "relu2"),
+                spixel_backend=config.get("spixel_backend", "diff_slic"),
+                use_jit=config.get("use_jit", False),
+                conv_stem_channels=tuple(config.get("conv_stem_channels", [32, 64, 128])),
+                conv_stem_kernel_sizes=tuple(config.get("conv_stem_kernel_sizes", [3, 5, 5])),
+                conv_stem_strides=tuple(config.get("conv_stem_strides", [1, 2, 2])),
+                conv_stem_norm=config.get("conv_stem_norm", "batchnorm2d"),
+                conv_post_norm=config.get("conv_post_norm", "layernorm"),
+            )
         else:
             rwkv_model = _create_model(
                 img_size=img_size,
@@ -446,14 +524,14 @@ def run_resolution_sweep(
                 act_layer=config.get("act_layer", "relu2"),
                 use_parallel=use_parallel,
             )
-        if hard_mode and model_type != "vq":
+        if hard_mode and model_type not in ("vq", "conv"):
             tokenizer = getattr(rwkv_model, "tokenizer", None)
             if tokenizer is not None:
                 setattr(tokenizer, "mode", "hard")
                 diff_slic = getattr(tokenizer, "diff_slic", None)
                 if diff_slic is not None:
                     setattr(diff_slic, "hard_mode", True)
-        if use_parallel and model_type != "vq":
+        if use_parallel and model_type not in ("vq", "conv"):
             pass  # already passed to model
 
 
@@ -574,9 +652,26 @@ def main():
     )
     parser.add_argument(
         "--model-type",
-        choices=["spix", "vq"],
+        choices=["spix", "vq", "conv"],
         default="spix",
         help="Backbone type (default: spix)",
+    )
+    parser.add_argument(
+        "--compare-variants",
+        nargs="+",
+        default=None,
+        help="If set, compare these variants head-to-head per size, e.g. spix conv vq",
+    )
+    parser.add_argument(
+        "--downsample-factors",
+        nargs="+",
+        default=[1.0],
+        type=float,
+        help="Downsample factors to sweep on spix/base variants (default: 1.0)",
+    )
+    parser.add_argument(
+        "--img-size", type=int, default=512,
+        help="Input image height in pixels (proportional width; default: 512)",
     )
     args = parser.parse_args()
 
@@ -601,11 +696,14 @@ def main():
     print("\n" + "=" * 70)
     print("PART 1: MODEL SIZE COMPARISON")
     print("=" * 70)
-    size_results = run_size_comparison(
+    size_results, variant_results = run_size_comparison(
         sizes, config_dir, device, args.warmup, args.runs, args.batch_size,
         use_parallel=args.use_parallel,
         hard_mode=args.hard_mode,
         model_type=args.model_type,
+        img_size=args.img_size,
+        compare_variants=args.compare_variants,
+        downsample_factors=args.downsample_factors,
     )
 
     # Part 2: Resolution sweep for selected model size
@@ -624,10 +722,11 @@ def main():
     print("\n" + "=" * 70)
     print("FINAL SUMMARY")
     print("=" * 70)
-    print(f"{'Size':<8} {'Img':<6} {'RWKV-7':<10} {'ViT':<10} {'Speedup':<8}")
+    print(f"{'Size':<14} {'Img':<6} {'RWKV-7':<10} {'ViT':<10} {'Speedup':<8}")
     print("-" * 70)
     for r in size_results:
-        print(f"{r['size']:<8} {r['img_size']:<6} {r['rwkv_time']:<10.2f} {r['vit_time']:<10.2f} "
+        factor_str = f" (df={r['downsample_factor']})" if "downsample_factor" in r else ""
+        print(f"{r['size'] + factor_str:<14} {r['img_size']:<6} {r['rwkv_time']:<10.2f} {r['vit_time']:<10.2f} "
               f"{r['speedup']:<8.2f}x")
 
     # diffSLIC breakdown analysis
@@ -637,23 +736,25 @@ def main():
     print("This shows what fraction of Vision RWKV-7 time is spent in diffSLIC.")
     print("When diffSLIC is ported to optimized C++, the backbone speedup")
     print("relative to ViT becomes more significant.\n")
-    print(f"{'Size':<8} {'Tokenizer %':<12} {'Backbone %':<12} {'Backbone/Tokenizer':<18}")
+    print(f"{'Size':<14} {'Tokenizer %':<12} {'Backbone %':<12} {'Backbone/Tokenizer':<18}")
     print("-" * 70)
     for r in size_results:
         tok_pct = 100 * r["rwkv_tokenizer"] / r["rwkv_time"]
         back_pct = 100 * r["rwkv_backbone"] / r["rwkv_time"]
         ratio = r["rwkv_backbone"] / r["rwkv_tokenizer"] if r["rwkv_tokenizer"] > 0 else 0
-        print(f"{r['size']:<8} {tok_pct:<12.1f} {back_pct:<12.1f} {ratio:<18.2f}x")
+        factor_str = f" (df={r['downsample_factor']})" if "downsample_factor" in r else ""
+        print(f"{r['size'] + factor_str:<14} {tok_pct:<12.1f} {back_pct:<12.1f} {ratio:<18.2f}x")
 
     # Memory comparison
     print("\n" + "=" * 70)
     print("MEMORY COMPARISON")
     print("=" * 70)
-    print(f"{'Size':<8} {'RWKV-7 (MB)':<14} {'ViT (MB)':<14} {'Ratio':<10}")
+    print(f"{'Size':<14} {'RWKV-7 (MB)':<14} {'ViT (MB)':<14} {'Ratio':<10}")
     print("-" * 70)
     for r in size_results:
         ratio = r["vit_mem_mb"] / r["rwkv_mem_mb"] if r["rwkv_mem_mb"] > 0 else 0
-        print(f"{r['size']:<8} {r['rwkv_mem_mb']:<14.2f} {r['vit_mem_mb']:<14.2f} {ratio:<10.2f}x")
+        factor_str = f" (df={r['downsample_factor']})" if "downsample_factor" in r else ""
+        print(f"{r['size'] + factor_str:<14} {r['rwkv_mem_mb']:<14.2f} {r['vit_mem_mb']:<14.2f} {ratio:<10.2f}x")
 
     # Analysis
     print("\n" + "=" * 70)
@@ -661,21 +762,42 @@ def main():
     print("=" * 70)
 
     fastest = min(size_results, key=lambda r: r["rwkv_time"])
-    print(f"Fastest Vision RWKV-7: {fastest['size']} ({fastest['rwkv_time']:.2f}ms)")
+    factor_str = f" (df={fastest['downsample_factor']})" if "downsample_factor" in fastest else ""
+    print(f"Fastest Vision RWKV-7: {fastest['size'] + factor_str} ({fastest['rwkv_time']:.2f}ms)")
 
     print("\nParameter efficiency (time per M params):")
     for r in size_results:
         rwkv_eff = r["rwkv_time"] / (r["rwkv_params"] / 1e6)
         vit_eff = r["vit_time"] / (r["vit_params"] / 1e6)
-        print(f"  {r['size']:<8}: RWKV-7={rwkv_eff:.4f}ms/M, ViT={vit_eff:.4f}ms/M")
+        factor_str = f" (df={r['downsample_factor']})" if "downsample_factor" in r else ""
+        print(f"  {r['size'] + factor_str:<14}: RWKV-7={rwkv_eff:.4f}ms/M, ViT={vit_eff:.4f}ms/M")
 
     print("\nKey findings:")
     for r in size_results:
+        factor_str = f" (df={r['downsample_factor']})" if "downsample_factor" in r else ""
         if r["rwkv_tokenizer"] > r["rwkv_backbone"]:
-            print(f"  {r['size']}: diffSLIC dominates ({100*r['rwkv_tokenizer']/r['rwkv_time']:.0f}% of time)")
+            print(f"  {r['size'] + factor_str}: diffSLIC dominates ({100*r['rwkv_tokenizer']/r['rwkv_time']:.0f}% of time)")
             print("    -> C++ diffSLIC kernel would significantly improve RWKV-7 speed")
         else:
-            print(f"  {r['size']}: Backbone dominates ({100*r['rwkv_backbone']/r['rwkv_time']:.0f}% of time)")
+            print(f"  {r['size'] + factor_str}: Backbone dominates ({100*r['rwkv_backbone']/r['rwkv_time']:.0f}% of time)")
+
+    if variant_results:
+        print("\n" + "=" * 70)
+        print("VARIANT COMPARISON")
+        print("=" * 70)
+        for size in sizes:
+            print(f"\n--- {size.upper()} ---")
+            print(f"{'Variant':<16} {'Params(M)':<12} {'Total(ms)':<12} {'Tokenizer(ms)':<16} {'Backbone(ms)':<14} {'Speedup':<10}")
+            print("-" * 80)
+            size_variants = [r for r in variant_results if r["size"] == size]
+            for r in size_variants:
+                factor_str = f" (df={r['downsample_factor']})" if "downsample_factor" in r else ""
+                print(f"{r['model_type'] + factor_str:<16} {r['rwkv_params']/1e6:<12.2f} {r['rwkv_time']:<12.2f} "
+                      f"{r['rwkv_tokenizer']:<16.2f} {r['rwkv_backbone']:<14.2f} {r['speedup']:<10.2f}x")
+
+            best = min(size_variants, key=lambda r: r["rwkv_time"]) if size_variants else None
+            if best:
+                print(f"  -> Fastest variant: {best['model_type']} ({best['rwkv_time']:.2f}ms)")
 
     # Explanation of results
     print("\n" + "=" * 70)

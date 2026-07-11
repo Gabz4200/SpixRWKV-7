@@ -61,12 +61,19 @@ def pil_to_balanced(
 ) -> torch.Tensor:
     """Convert PIL RGB to 6-channel balanced tensor for SpixRWKV-7 input.
 
+    Resizes so that height matches ``img_size`` (proportional width).
+    If ``img_size <= 0``, original resolution is preserved.
+
     Pipeline: RGB -> OkLAB -> Fixed Balancing (2*L-1, chroma_scale*a/b)
               -> alpha -> xy coords.
     """
-    pil_image = pil_image.convert("RGB").resize(
-        (img_size, img_size), Image.Resampling.BILINEAR
-    )
+    pil_image = pil_image.convert("RGB")
+    if img_size > 0:
+        orig_w, orig_h = pil_image.size
+        aspect = orig_w / orig_h
+        new_h = img_size
+        new_w = int(round(new_h * aspect))
+        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
     # (1, 3, H, W) float32 [0, 1]
     arr = np.array(pil_image, dtype=np.float32) / 255.0
     img_tensor = (
@@ -335,7 +342,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--img-size", type=int, default=64,
-        help="Input image size in pixels (square)"
+        help="Input image height in pixels (proportional width)"
     )
     parser.add_argument(
         "--num-superpixels", type=int, default=36,
@@ -498,7 +505,7 @@ def main() -> None:
     )
 
     print("  Device          CPU")
-    print(f"  Image size      {args.img_size}x{args.img_size}")
+    print(f"  Image height      {args.img_size}")
     print(f"  Embed dims      {args.embed_dims}")
     print(f"  Heads           {args.num_heads}")
     print(f"  Depth           {args.depth}")

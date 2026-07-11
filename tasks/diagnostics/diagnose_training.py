@@ -24,7 +24,11 @@ from spixrwkv7 import ClassificationHead  # noqa: E402
 from spixrwkv7.kernels.optimized_vision import (  # noqa: E402
     create_optimized_vision_rwkv7 as _create_model,
 )
+from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7  # noqa: E402
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7  # noqa: E402
+
+# Global image size override (set from CLI --img-size)
+_IMG_SIZE: int = 512
 
 
 def synth_batch(batch_size, num_classes, img_size, device):
@@ -34,11 +38,14 @@ def synth_batch(batch_size, num_classes, img_size, device):
 
 
 def build_model(depth, embed_dims, num_heads, num_superpixels, device,
-                model_type="spix", codebook_size=1024, downsample_factor=16,
-                latent_dim=None, num_res_blocks=2):
+                model_type="spix", codebook_size=1024, downsample_factor=None,
+                latent_dim=None, num_res_blocks=2, img_size=512):
+    if downsample_factor is None:
+        downsample_factor = 16 if model_type == "vq" else 1.0
+
     if model_type == "vq":
         backbone = create_vq_rwkv7(
-            img_size=512,
+            img_size=img_size,
             embed_dims=embed_dims,
             num_heads=num_heads,
             depth=depth,
@@ -57,9 +64,9 @@ def build_model(depth, embed_dims, num_heads, num_superpixels, device,
             act_layer="swiglu",
         ).to(device)
         backbone._init_weights()
-    else:
-        backbone = _create_model(
-            img_size=512,
+    elif model_type == "conv":
+        backbone = create_conv_vision_rwkv7(
+            img_size=img_size,
             embed_dims=embed_dims,
             num_heads=num_heads,
             depth=depth,
@@ -75,6 +82,27 @@ def build_model(depth, embed_dims, num_heads, num_superpixels, device,
             drop_path_rate=0.0,
             norm_layer="rmsnorm",
             act_layer="swiglu",
+        ).to(device)
+        backbone._init_weights()
+    else:
+        backbone = _create_model(
+            img_size=img_size,
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            depth=depth,
+            init_values=1e-5,
+            final_norm=True,
+            out_indices=[depth - 1],
+            with_cls_token=False,
+            output_cls_token=False,
+            scatter_output=False,
+            num_superpixels=num_superpixels,
+            diff_slic_iters=1,
+            compactness=0.5,
+            drop_path_rate=0.0,
+            norm_layer="rmsnorm",
+            act_layer="swiglu",
+            downsample_factor=downsample_factor,
         ).to(device)
         backbone._init_weights()
     head = ClassificationHead(embed_dims, 10).to(device)
@@ -96,7 +124,7 @@ def run(
     seed: int = 42,
     model_type: str = "spix",
     codebook_size: int = 1024,
-    downsample_factor: int = 16,
+    downsample_factor: float | None = None,
     latent_dim: int | None = None,
     num_res_blocks: int = 2,
 ):
@@ -114,7 +142,8 @@ def run(
                                   codebook_size=codebook_size,
                                   downsample_factor=downsample_factor,
                                   latent_dim=latent_dim,
-                                  num_res_blocks=num_res_blocks)
+                                  num_res_blocks=num_res_blocks,
+                                  img_size=_IMG_SIZE)
     total = sum(p.numel() for p in backbone.parameters())
     head_params = sum(p.numel() for p in head.parameters())
     log(f"PARAMS backbone={total} head={head_params}")
@@ -123,7 +152,7 @@ def run(
         list(backbone.parameters()) + list(head.parameters()),
         lr=lr, weight_decay=0.0,
     )
-    x, y = synth_batch(4, 10, 512, device)
+    x, y = synth_batch(4, 10, _IMG_SIZE, device)
 
     # Track metrics
     losses, accs, grad_norms = [], [], []
@@ -222,40 +251,40 @@ def run(
 # Experiment runners
 # =====================================================================
 
-def exp_lr_sweep():
+def exp_lr_sweep(downsample_factor=None):
     log("=== LR SWEEP ===")
     for lr in [1e-3, 5e-4, 1e-4, 5e-5]:
-        run(label=f"lr={lr}", lr=lr)
+        run(label=f"lr={lr}", lr=lr, downsample_factor=downsample_factor)
         print()  # blank line between runs
 
-def exp_depth():
+def exp_depth(downsample_factor=None):
     log("=== DEPTH SCALING ===")
     for depth in [1, 2, 4]:
         num_sup = 36  # keep constant for comparability
-        run(label=f"depth={depth}", depth=depth, num_superpixels=num_sup)
+        run(label=f"depth={depth}", depth=depth, num_superpixels=num_sup, downsample_factor=downsample_factor)
         print()
 
-def exp_seeds():
+def exp_seeds(downsample_factor=None):
     log("=== SEED REPRODUCIBILITY ===")
     for seed in [42, 123, 456, 789]:
-        run(label=f"seed={seed}", seed=seed)
+        run(label=f"seed={seed}", seed=seed, downsample_factor=downsample_factor)
         print()
 
-def exp_gradient_deep():
+def exp_gradient_deep(downsample_factor=None):
     """Run a deeper model (depth=4) and track per-layer gradients."""
     log("=== GRADIENT DIAGNOSTIC (depth=4) ===")
-    run(label="grad-diag-depth4", depth=4, max_steps=2)
+    run(label="grad-diag-depth4", depth=4, max_steps=2, downsample_factor=downsample_factor)
     print()
 
-def exp_no_head(model_type="spix"):
+def exp_no_head(model_type="spix", downsample_factor=None):
     """Verify backbone features alone are finite and have nonzero variance."""
     log("=== NO-HEAD FEATURE SANITY ===")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(42)
     np.random.seed(42)
     random.seed(42)
-    x, _ = synth_batch(4, 10, 512, device)
-    backbone, _ = build_model(2, 128, 2, 36, device, model_type=model_type)
+    x, _ = synth_batch(4, 10, _IMG_SIZE, device)
+    backbone, _ = build_model(2, 128, 2, 36, device, model_type=model_type, img_size=_IMG_SIZE, downsample_factor=downsample_factor)
     with torch.no_grad():
         outs = backbone(x)
         feat = outs[0]
@@ -277,32 +306,44 @@ if __name__ == "__main__":
     parser.add_argument("--seeds", action="store_true")
     parser.add_argument("--grad-deep", action="store_true")
     parser.add_argument("--no-head", action="store_true")
-    parser.add_argument("--model-type", choices=["spix", "vq"], default="spix",
+    parser.add_argument("--model-type", choices=["spix", "vq", "conv"], default="spix",
                         help="Backbone type (default: spix)")
     parser.add_argument("--codebook-size", type=int, default=1024,
                         help="VQ codebook size")
     parser.add_argument("--downsample-factor", type=int, default=16,
                         help="VQ downsample factor")
+    parser.add_argument("--downsample-factors", type=float, nargs="+", default=[1.0],
+                        help="Downsample factor sweep for spix")
     parser.add_argument("--latent-dim", type=int, default=None,
                         help="VQ latent dimension (default: embed_dims)")
     parser.add_argument("--num-res-blocks", type=int, default=2,
                         help="Number of VQ residual blocks")
+    parser.add_argument("--img-size", type=int, default=512,
+                        help="Input image height for synthetic data (default: 512)")
     args = parser.parse_args()
 
     if not any(v for v in vars(args).values() if v is True):
         args.all = True
 
+    # Apply CLI image size override globally
+    _IMG_SIZE = args.img_size  # noqa: F811
+    globals()['_IMG_SIZE'] = _IMG_SIZE
+
     from spixrwkv7.utils import redirect_stdout_tee
     os.makedirs('results', exist_ok=True)
-    with redirect_stdout_tee('results/diagnose_training.txt'):
-        if args.all or args.lr_sweep:
-            exp_lr_sweep()
-        if args.all or args.depth:
-            exp_depth()
-        if args.all or args.seeds:
-            exp_seeds()
-        if args.all or args.grad_deep:
-            exp_gradient_deep()
-        if args.all or args.no_head:
-            exp_no_head(model_type=args.model_type)
-    print('Results saved to results/diagnose_training.txt')
+    with redirect_stdout_tee('results/diagnose_training_downsample.txt'):
+        factors = args.downsample_factors if args.model_type == "spix" else [None]
+        for df in factors:
+            if args.model_type == "spix":
+                log(f"=== SWEEP RUN: downsample_factor = {df} ===")
+            if args.all or args.lr_sweep:
+                exp_lr_sweep(downsample_factor=df)
+            if args.all or args.depth:
+                exp_depth(downsample_factor=df)
+            if args.all or args.seeds:
+                exp_seeds(downsample_factor=df)
+            if args.all or args.grad_deep:
+                exp_gradient_deep(downsample_factor=df)
+            if args.all or args.no_head:
+                exp_no_head(model_type=args.model_type, downsample_factor=df)
+    print('Results saved to results/diagnose_training_downsample.txt')
