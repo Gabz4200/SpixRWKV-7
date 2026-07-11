@@ -17,6 +17,7 @@ dependencies = [
     "torchvision>=0.27.0",
     "datasets>=5.0.0",
     "einops>=0.8.0",
+    "torch-geometric>=2.0.0",
 ]
 
 [[tool.uv.index]]
@@ -24,8 +25,13 @@ name = "pytorch"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+[tool.uv]
+environments = ["sys_platform == 'linux'" ]
+find-links = ["https://data.pyg.org/whl/torch-2.12.1+cpu.html"]
+
 [tool.uv.sources]
 torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
