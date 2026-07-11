@@ -176,10 +176,14 @@ def smart_resize(
 def preprocess_image_for_rwkv7(
     image_path: str,
     img_size: int = -1,
-    target_size: Tuple[int, int] = (64, 64),
+    target_size: Optional[Tuple[int, int]] = None,
     include_alpha: bool = True,
 ) -> torch.Tensor:
     """Full preprocessing pipeline returning (1, 6, H, W) tensor: OkLAB + alpha + xy.
+
+    Resizes proportionally so the output height matches ``img_size`` (unless -1,
+    which preserves original resolution). Pass ``target_size`` to force an exact
+    (H, W) size (overrides ``img_size``).
 
     Args:
         image_path: Path to image file.
