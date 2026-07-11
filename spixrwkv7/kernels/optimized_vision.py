@@ -55,6 +55,7 @@ class OptimizedVision_RWKV7(Vision_RWKV7):
         attnres_gate_type: str = "bias",
         attnres_num_blocks: int = 8,
         attnres_recency_bias_init: float = 10.0,
+        downsample_factor: float = 1.0,
     ):
         super().__init__(
             img_size=img_size,
@@ -84,6 +85,7 @@ class OptimizedVision_RWKV7(Vision_RWKV7):
             attnres_gate_type=attnres_gate_type,
             attnres_num_blocks=attnres_num_blocks,
             attnres_recency_bias_init=attnres_recency_bias_init,
+            downsample_factor=downsample_factor,
         )
 
     def _make_blocks(
@@ -160,6 +162,7 @@ def create_optimized_vision_rwkv7(
     attnres_num_blocks: int = 8,
     attnres_recency_bias_init: float = 10.0,
     use_jit: bool = False,
+    downsample_factor: float = 1.0,
 ) -> torch.nn.Module:
     """Create optimized Vision_RWKV7 with 6-channel input."""
     _model: torch.nn.Module = OptimizedVision_RWKV7(
@@ -190,5 +193,6 @@ def create_optimized_vision_rwkv7(
         attnres_gate_type=attnres_gate_type,
         attnres_num_blocks=attnres_num_blocks,
         attnres_recency_bias_init=attnres_recency_bias_init,
+        downsample_factor=downsample_factor,
     )
     return maybe_compile(_model, use_jit=use_jit)

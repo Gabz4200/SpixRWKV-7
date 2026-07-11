@@ -853,6 +853,7 @@ class SuperpixelTokenizer(nn.Module):
         use_cpp: bool = False,
         norm_layer: str = "layernorm",
         spixel_backend: str = "diff_slic",
+        downsample_factor: float = 1.0,
     ):
         super().__init__()
         self.in_chans = in_chans
@@ -862,6 +863,11 @@ class SuperpixelTokenizer(nn.Module):
         self.mode = mode
         self.spixel_backend = spixel_backend
         self.diff_slic_iters = diff_slic_iters
+        self.downsample_factor = float(downsample_factor)
+        if self.downsample_factor < 1.0:
+            raise ValueError(
+                f"downsample_factor must be >= 1.0, got {self.downsample_factor}"
+            )
 
         if spixel_backend == "diff_slic":
             self.diff_slic = DiffSLIC(
@@ -897,6 +903,40 @@ class SuperpixelTokenizer(nn.Module):
             in_chans, embed_dims, num_superpixels, mode=mode, norm_layer=norm_layer,
         )
 
+    def _downsample_for_tokenizer(self, x: torch.Tensor):
+        factor = self.downsample_factor
+        if factor <= 1.0:
+            return x, None
+        new_h = max(1, int(round(x.shape[-2] / factor)))
+        new_w = max(1, int(round(x.shape[-1] / factor)))
+        if (new_h, new_w) == x.shape[-2:]:
+            return x, None
+        x_down = F.interpolate(x, size=(new_h, new_w), mode="bilinear", align_corners=False)
+        return x_down, (new_h, new_w)
+
+    @staticmethod
+    def _interpolate_mask(mask: Optional[torch.Tensor], orig_hw: Tuple[int, int]) -> Optional[torch.Tensor]:
+        if mask is None:
+            return mask
+        if mask.shape[-2:] == orig_hw:
+            return mask
+        return F.interpolate(
+            mask,
+            size=orig_hw,
+            mode="bilinear" if mask.dtype.is_floating_point else "nearest",
+            align_corners=False,
+        )
+
+    @staticmethod
+    def _interpolate_labels(labels: Optional[torch.Tensor], orig_hw: Tuple[int, int]) -> Optional[torch.Tensor]:
+        if labels is None:
+            return labels
+        if labels.shape[-2:] == orig_hw:
+            return labels
+        return F.interpolate(
+            labels.unsqueeze(1).float(), size=orig_hw, mode="nearest"
+        ).squeeze(1).long()
+
     def forward(
         self,
         x: torch.Tensor,
@@ -917,6 +957,13 @@ class SuperpixelTokenizer(nn.Module):
           h_s, w_s       — superpixel grid dimensions
         """
         B, _, H, W = x.shape
+        x_slic = x
+        orig_hw = (H, W)
+        if self.downsample_factor > 1.0:
+            new_h = max(1, int(round(H / self.downsample_factor)))
+            new_w = max(1, int(round(W / self.downsample_factor)))
+            if (new_h, new_w) != (H, W):
+                x_slic = F.interpolate(x, size=(new_h, new_w), mode="bilinear", align_corners=False)
 
         # Determine superpixel count
         if num_superpixels is None:
@@ -927,9 +974,11 @@ class SuperpixelTokenizer(nn.Module):
         else:
             n_sp = num_superpixels
 
-        # Determine grid shape
-        height_s = max(1, int(math.sqrt(n_sp * H / W)))
-        width_s = max(1, int(math.sqrt(n_sp * W / H)))
+
+        # Determine grid shape from the downsampled spatial size
+        h_src, w_src = x_slic.shape[-2:]
+        height_s = max(1, int(math.sqrt(n_sp * h_src / w_src)))
+        width_s = max(1, int(math.sqrt(n_sp * w_src / h_src)))
         h_s, w_s = height_s, width_s
         K = h_s * w_s
 
@@ -938,8 +987,7 @@ class SuperpixelTokenizer(nn.Module):
         global_labels: Optional[torch.Tensor] = None
 
         if self.spixel_backend == "diff_slic":
-            # diffSLIC
-            x_for_slic = torch.cat([x[:, :-2], x[:, -2:] * self.compactness], dim=1)
+            x_for_slic = torch.cat([x_slic[:, :-2], x_slic[:, -2:] * self.compactness], dim=1)
             assert self.diff_slic is not None
             clst_feats, p2s_assign, _ = self.diff_slic(x_for_slic, n_spixels=n_sp)
             h_s, w_s = clst_feats.shape[-2:]
@@ -955,7 +1003,7 @@ class SuperpixelTokenizer(nn.Module):
                     .float()
                 )
                 label_grid = (
-                    torch.arange(K, dtype=torch.float, device=x.device)
+                    torch.arange(K, dtype=torch.float, device=x_slic.device)
                     .reshape(1, 1, h_s, w_s)
                     .expand(B, -1, -1, -1)
                 )
@@ -964,10 +1012,12 @@ class SuperpixelTokenizer(nn.Module):
                     .squeeze(1)
                     .long()
                 )
+                if self.downsample_factor > 1.0 and global_labels.shape[-2:] != orig_hw:
+                    global_labels = self._interpolate_labels(global_labels, orig_hw)
                 tokens, centroids = self.patch_embed(x, global_labels, K=K)
             else:
                 spixel_ids = (
-                    torch.arange(K, device=x.device)
+                    torch.arange(K, device=x_slic.device)
                     .reshape(1, K, 1, 1)
                     .expand(B, -1, h_s, w_s)
                     .float()
@@ -975,41 +1025,49 @@ class SuperpixelTokenizer(nn.Module):
                 global_soft_mask = spixel_upsampling(
                     spixel_ids, p2s_assign, candidate_radius=radius
                 )
+                if self.downsample_factor > 1.0 and global_soft_mask.shape[-2:] != orig_hw:
+                    global_soft_mask = self._interpolate_mask(global_soft_mask, orig_hw)
                 tokens, centroids = self.patch_embed(x, global_soft_mask)
         elif self.spixel_backend == "lnsnet":
-            # LNSNet
-            x_lnsnet = torch.cat([x[:, :3], x[:, 4:6]], dim=1)
+            x_lnsnet = torch.cat([x_slic[:, :3], x_slic[:, 4:6]], dim=1)
             x_lnsnet = (x_lnsnet - x_lnsnet.mean(dim=(2, 3), keepdim=True)) / (x_lnsnet.std(dim=(2, 3), keepdim=True) + 1e-6)
 
             assert self.lnsnet_model is not None
             cx, cy, f, probs = self.lnsnet_model(x_lnsnet)
 
-            # Recalculate grid shape K based on actual seed count generated
-            S = H * W / n_sp
-            sp_h = max(1, int(math.floor(math.sqrt(S) / (W / float(H)))))
+            S = h_src * w_src / max(n_sp, 1)
+            sp_h = max(1, int(math.floor(math.sqrt(S) / (w_src / float(h_src)))))
             sp_w = max(1, int(math.floor(S / math.floor(sp_h))))
-            h_s = int(math.ceil(H / sp_h))
-            w_s = int(math.ceil(W / sp_w))
+            h_s = int(math.ceil(h_src / sp_h))
+            w_s = int(math.ceil(w_src / sp_w))
             K = h_s * w_s
 
-            p2s_assign = lnsnet_assignment(f, x_lnsnet, cx, cy) # shape (B, K, H, W)
+            p2s_assign = lnsnet_assignment(f, x_lnsnet, cx, cy) # shape (B, K, h_src, w_src)
 
             if self.mode == "hard":
-                global_labels = p2s_assign.argmax(dim=1) # shape (B, H, W)
+                global_labels = p2s_assign.argmax(dim=1)
+                if self.downsample_factor > 1.0 and global_labels.shape[-2:] != orig_hw:
+                    global_labels = self._interpolate_labels(global_labels, orig_hw)
                 tokens, centroids = self.patch_embed(x, global_labels, K=K)
             else:
-                global_soft_mask = p2s_assign # shape (B, K, H, W)
+                global_soft_mask = p2s_assign
+                if self.downsample_factor > 1.0 and global_soft_mask.shape[-2:] != orig_hw:
+                    global_soft_mask = self._interpolate_mask(global_soft_mask, orig_hw)
                 tokens, centroids = self.patch_embed(x, global_soft_mask)
         elif self.spixel_backend == "grid":
-            grid_y = torch.arange(H, device=x.device) * h_s // H
-            grid_x = torch.arange(W, device=x.device) * w_s // W
+            grid_y = torch.arange(h_src, device=x_slic.device) * h_s // h_src
+            grid_x = torch.arange(w_src, device=x_slic.device) * w_s // w_src
             gy, gx = torch.meshgrid(grid_y, grid_x, indexing="ij")
             global_labels = (gy * w_s + gx).unsqueeze(0).expand(B, -1, -1).long()
 
             if self.mode == "hard":
+                if self.downsample_factor > 1.0 and global_labels.shape[-2:] != orig_hw:
+                    global_labels = self._interpolate_labels(global_labels, orig_hw)
                 tokens, centroids = self.patch_embed(x, global_labels, K=K)
             else:
                 global_soft_mask = F.one_hot(global_labels, num_classes=K).permute(0, 3, 1, 2).float()
+                if self.downsample_factor > 1.0 and global_soft_mask.shape[-2:] != orig_hw:
+                    global_soft_mask = self._interpolate_mask(global_soft_mask, orig_hw)
                 tokens, centroids = self.patch_embed(x, global_soft_mask)
         elif self.spixel_backend in ("slic", "slico"):
             import numpy as np
@@ -1018,7 +1076,7 @@ class SuperpixelTokenizer(nn.Module):
             comp = self.compactness * 20.0
             slic_zero = (self.spixel_backend == "slico")
             for i in range(B):
-                img_np = x[i, :3].permute(1, 2, 0).detach().cpu().numpy()
+                img_np = x_slic[i, :3].permute(1, 2, 0).detach().cpu().numpy()
                 lbls = seg.slic(
                     img_np,
                     n_segments=K,
@@ -1029,13 +1087,17 @@ class SuperpixelTokenizer(nn.Module):
                     enforce_connectivity=True,
                 )
                 lbls = np.clip(lbls, 0, K - 1)
-                labels_list.append(torch.from_numpy(lbls).to(device=x.device, dtype=torch.long))
+                labels_list.append(torch.from_numpy(lbls).to(device=x_slic.device, dtype=torch.long))
             global_labels = torch.stack(labels_list, dim=0)
 
             if self.mode == "hard":
+                if self.downsample_factor > 1.0 and global_labels.shape[-2:] != orig_hw:
+                    global_labels = self._interpolate_labels(global_labels, orig_hw)
                 tokens, centroids = self.patch_embed(x, global_labels, K=K)
             else:
                 global_soft_mask = F.one_hot(global_labels, num_classes=K).permute(0, 3, 1, 2).float()
+                if self.downsample_factor > 1.0 and global_soft_mask.shape[-2:] != orig_hw:
+                    global_soft_mask = self._interpolate_mask(global_soft_mask, orig_hw)
                 tokens, centroids = self.patch_embed(x, global_soft_mask)
         else:
             raise ValueError(f"Unknown spixel_backend: {self.spixel_backend}")
@@ -1103,6 +1165,7 @@ class Vision_RWKV7(nn.Module):
         attnres_gate_type: str = "bias",
         attnres_num_blocks: int = 8,
         attnres_recency_bias_init: float = 10.0,
+        downsample_factor: float = 1.0,
         **kwargs,
     ):
         super().__init__()
@@ -1117,6 +1180,7 @@ class Vision_RWKV7(nn.Module):
         self.num_superpixels = num_superpixels
         self.spixel_size = spixel_size
         self.spixel_backend = spixel_backend
+        self.downsample_factor = downsample_factor
 
         # Attention Residuals configuration
         self.use_attnres = use_attnres
@@ -1136,16 +1200,17 @@ class Vision_RWKV7(nn.Module):
 
         # Vision-to-token pipeline
         self.tokenizer = SuperpixelTokenizer(
-            in_chans=in_chans,
-            embed_dims=embed_dims,
-            num_superpixels=num_superpixels,
-            compactness=compactness,
-            diff_slic_iters=diff_slic_iters,
-            mode="soft",
-            use_cpp=use_cpp,
-            norm_layer=norm_layer,
-            spixel_backend=spixel_backend,
-        )
+                    in_chans=in_chans,
+                    embed_dims=embed_dims,
+                    num_superpixels=num_superpixels,
+                    compactness=compactness,
+                    diff_slic_iters=diff_slic_iters,
+                    mode="soft",
+                    use_cpp=use_cpp,
+                    norm_layer=norm_layer,
+                    spixel_backend=spixel_backend,
+                    downsample_factor=downsample_factor,
+                )
         # Keep patch_embed as a public alias for backward compat (tests access .patch_embed.mode)
         self.patch_embed = self.tokenizer.patch_embed
 
@@ -1458,6 +1523,7 @@ def create_vision_rwkv7(
     attnres_num_blocks: int = 8,
     attnres_recency_bias_init: float = 10.0,
     use_jit: bool = False,
+    downsample_factor: float = 1.0,
 ) -> torch.nn.Module:
     """
     Creates a Vision_RWKV7 model enforced to 6-channel input (L, a, b, alpha, x, y).
@@ -1491,5 +1557,6 @@ def create_vision_rwkv7(
         attnres_gate_type=attnres_gate_type,
         attnres_num_blocks=attnres_num_blocks,
         attnres_recency_bias_init=attnres_recency_bias_init,
+        downsample_factor=downsample_factor,
     )
     return maybe_compile(_model, use_jit=use_jit)
