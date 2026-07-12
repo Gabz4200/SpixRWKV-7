@@ -777,13 +777,13 @@ def test_sequence_masking_backbone():
     B, C, H, W = 2, 6, 64, 64
     x = torch.randn(B, C, H, W, device=device)
 
-    # Create backbone
+    # Create backbone (num_superpixels defaults to 256)
     model = create_vision_rwkv7(img_size=64, embed_dims=128, depth=2, num_heads=2, scatter_output=True).to(device)
+    K = model.num_superpixels
 
     # Since token ordering is Hilbert-sorted, we pass a mask of the same size as the number of superpixels
-    # Let's say we have 196 superpixels. Let's mask some of them out.
-    mask = torch.ones(B, 196, device=device)
-    mask[0, 100:] = 0.0
+    mask = torch.ones(B, K, device=device)
+    mask[0, K // 2:] = 0.0
 
     # Run model with mask
     outs = model(x, mask=mask)
@@ -1285,3 +1285,27 @@ def test_vq_rwkv7_attnres_mode():
     assert len(outs) == 1
     assert outs[0].shape == (1, 64, 4, 4)
     assert torch.isfinite(outs[0]).all()
+
+
+def test_config_loader_instantiation():
+    """Verify that all model types and sizes can be built via tasks/config_loader."""
+    from tasks.config_loader import load_model_config, build_backbone
+    for model_type in ["spix", "conv", "vq", "gnn"]:
+        for size in ["tiny"]:
+            cfg = load_model_config(model_type, size)
+            # Force scatter_output=True for test
+            cfg["scatter_output"] = True
+            model = build_backbone(model_type, cfg)
+
+            # Run a forward pass
+            x = torch.randn(1, 6, 64, 64)
+            out = model(x)
+            if isinstance(out, (list, tuple)):
+                out = out[-1]
+            if model_type == "conv":
+                expected_shape = (1, cfg["embed_dims"], 16, 16)
+            else:
+                expected_shape = (1, cfg["embed_dims"], 64, 64)
+            assert out.shape == expected_shape
+            assert torch.isfinite(out).all()
+

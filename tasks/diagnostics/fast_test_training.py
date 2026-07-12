@@ -30,6 +30,7 @@ from spixrwkv7 import ClassificationHead
 from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
+from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision_rwkv7
 
 # ---------------------------------------------------------------------------
 # Default hyper-parameters (tuned for single-batch overfit)
@@ -96,7 +97,7 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--use-attnres", action="store_true", help="Enable Attention Residuals")
-    parser.add_argument("--model-type", choices=["spix", "vq", "conv"], default="spix",
+    parser.add_argument("--model-type", choices=["spix", "vq", "conv", "gnn"], default="spix",
                         help="Backbone type (default: spix)")
     parser.add_argument("--codebook-size", type=int, default=1024,
                         help="VQ codebook size")
@@ -119,11 +120,11 @@ def main() -> None:
         args.batch_size, args.num_classes, args.img_size, device
     )
 
-    factors = args.downsample_factors if args.model_type == "spix" else [1.0]
+    factors = args.downsample_factors if args.model_type in ("spix", "gnn") else [1.0]
 
     for df in factors:
-        if args.model_type == "spix":
-            print(f"\n=== Running Spix model with downsample_factor = {df} ===")
+        if args.model_type in ("spix", "gnn"):
+            print(f"\n=== Running {args.model_type} model with downsample_factor = {df} ===")
 
         # ---- Seed everything ----
         torch.manual_seed(args.seed)
@@ -146,15 +147,22 @@ def main() -> None:
                 out_indices=[args.depth - 1],
                 with_cls_token=False,
                 output_cls_token=False,
+                register_tokens=0,
                 scatter_output=False,
                 drop_path_rate=_DROP_PATH,
                 codebook_size=args.codebook_size,
                 downsample_factor=args.downsample_factor,
                 latent_dim=args.latent_dim,
                 num_res_blocks=args.num_res_blocks,
+                use_ema=False,
+                beta=0.25,
                 norm_layer="rmsnorm",
                 act_layer="swiglu",
                 use_attnres=args.use_attnres,
+                attnres_mode="block",
+                attnres_gate_type="bias",
+                attnres_num_blocks=8,
+                attnres_recency_bias_init=10.0,
             ).to(device)
             backbone._init_weights()
         elif args.model_type == "conv":
@@ -180,6 +188,28 @@ def main() -> None:
                 conv_stem_strides=(1, 2, 2),
                 conv_stem_norm="batchnorm2d",
                 conv_post_norm="layernorm",
+            ).to(device)
+            backbone._init_weights()
+        elif args.model_type == "gnn":
+            backbone = create_gnn_vision_rwkv7(
+                img_size=args.img_size,
+                embed_dims=args.embed_dims,
+                num_heads=args.num_heads,
+                depth=args.depth,
+                init_values=_INIT_VALUES,
+                final_norm=True,
+                out_indices=[args.depth - 1],
+                num_superpixels=args.num_superpixels,
+                scatter_output=False,
+                diff_slic_iters=1,
+                compactness=0.5,
+                drop_path_rate=_DROP_PATH,
+                norm_layer="rmsnorm",
+                act_layer="swiglu",
+                downsample_factor=df,
+                gnn_conv="gatv2",
+                gnn_heads=4,
+                gnn_aggr="mean",
             ).to(device)
             backbone._init_weights()
         else:

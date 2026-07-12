@@ -10,8 +10,15 @@ using namespace spixrwkv7::kernel;
 
 // ===================================================================
 // Generic cluster update
-// For each cluster center (i,j), extract a window of pixels,
-// compute similarity, softmax, and weighted aggregation
+// For each cluster center (i,j), extract a DENSE window of pixels of size
+// (stride*(2r+1)) x (stride*(2r+1)) around the center's pixel position
+// (i*stride, j*stride), compute raw dot-product similarities, softmax them
+// (divided by tau), and aggregate the pixel features. Out-of-bounds pixels
+// are masked (similarity -> -1e9), matching the PyTorch reference
+// (spixrwkv7/data/diff_slic.py, compute_center_to_elem_assignment +
+// _masked_softmax). No cosine normalization is applied (the reference uses
+// raw dot products). When `normalize` is true, the aggregated cluster
+// feature is L2-normalized (matching the Python wrapper).
 // ===================================================================
 
 torch::Tensor spixrwkv7::kernel::update_clusters_generic(
@@ -33,91 +40,85 @@ torch::Tensor spixrwkv7::kernel::update_clusters_generic(
     const float* clst = clst_feats.data_ptr<float>();
     float* result = out.data_ptr<float>();
 
+    const int64_t clst_sz = (int64_t)h_s * w_s;
+    const int64_t clst_stride = C * clst_sz;  // B stride
+    const int64_t elem_sz = (int64_t)H * W;
+    const int64_t elem_stride = C * elem_sz;  // B stride
+
+    const int half_h = stride_h * radius;
+    const int half_w = stride_w * radius;
+    const int win_h = stride_h * (2 * radius + 1);
+    const int win_w = stride_w * (2 * radius + 1);
+    const int n = win_h * win_w;
+
+    #pragma omp parallel for collapse(3)
     for (int64_t b = 0; b < B; b++) {
-        for (int i = 0; i < h_s; i++) {
-            for (int j = 0; j < w_s; j++) {
-                // Center pixel position in padded image
-                const int cy = i * stride_h;
-                const int cx = j * stride_w;
+        for (int64_t i = 0; i < h_s; i++) {
+            for (int64_t j = 0; j < w_s; j++) {
+                std::vector<float> sim_buf(n);
+                const int top = i * stride_h - half_h;
+                const int left = j * stride_w - half_w;
 
-                // Get cluster center feature
-                const float* center = clst + b * C * h_s * w_s + i * C * w_s + j * C;
-                float* dst = result + b * C * h_s * w_s + i * C * w_s + j * C;
-
-                // Normalize cluster center if requested
-                float center_norm = 0.0f;
-                if (normalize) {
-                    for (int c = 0; c < C; c++)
-                        center_norm += center[c] * center[c];
-                    center_norm = std::max(center_norm, 1e-8f);
-                    center_norm = 1.0f / std::sqrt(center_norm);
-                }
-
-                // Extract window and compute similarities
-                float sim_buf[256]; // max 9x9=81 for radius=4
-                int valid_count = 0;
-
-                for (int di = -radius; di <= radius; di++) {
-                    for (int dj = -radius; dj <= radius; dj++) {
-                        const int py = cy + di * stride_h;
-                        const int px = cx + dj * stride_w;
-
+                float max_sim = -1e30f;
+                for (int di = 0; di < win_h; di++) {
+                    for (int dj = 0; dj < win_w; dj++) {
+                        const int py = top + di;
+                        const int px = left + dj;
+                        const int k = di * win_w + dj;
                         if (py >= 0 && py < H && px >= 0 && px < W) {
-                            const float* pixel = elem + b * C * H * W + py * C * W + px * C;
-
                             float sim = 0.0f;
-                            if (normalize) {
-                                float p_norm = 0.0f;
-                                for (int c = 0; c < C; c++)
-                                    p_norm += pixel[c] * pixel[c];
-                                p_norm = std::max(p_norm, 1e-8f);
-                                p_norm = 1.0f / std::sqrt(p_norm);
-                                for (int c = 0; c < C; c++)
-                                    sim += (center[c] * center_norm) * (pixel[c] * p_norm);
-                            } else {
-                                for (int c = 0; c < C; c++)
-                                    sim += center[c] * pixel[c];
+                            for (int c = 0; c < C; c++) {
+                                float c_val = clst[b * clst_stride + c * clst_sz + i * w_s + j];
+                                float p_val = elem[b * elem_stride + c * elem_sz + py * W + px];
+                                sim += c_val * p_val;
                             }
-                            sim_buf[valid_count] = sim / tau;
-                            valid_count++;
+                            if (sim == 0.0f) sim = -1e9f;  // masked like reference
+                            else sim = sim / tau;
+                            sim_buf[k] = sim;
+                            if (sim > max_sim) max_sim = sim;
+                        } else {
+                            sim_buf[k] = -1e9f;  // OOB -> masked
                         }
                     }
                 }
 
-                if (valid_count == 0) {
-                    std::memset(dst, 0, C * sizeof(float));
-                    continue;
+                float sum_exp = 0.0f;
+                for (int k = 0; k < n; k++) {
+                    if (sim_buf[k] > -1e8f) {
+                        const float sim = sim_buf[k] - max_sim;
+                        sum_exp += std::exp(sim);
+                    }
+                }
+                const float inv_sum = 1.0f / (sum_exp + 1e-10f);
+
+                for (int c = 0; c < C; c++) {
+                    result[b * clst_stride + c * clst_sz + i * w_s + j] = 0.0f;
                 }
 
-                // Stable softmax
-                float max_sim = sim_buf[0];
-                for (int p = 1; p < valid_count; p++)
-                    max_sim = std::max(max_sim, sim_buf[p]);
-
-                float sum_exp = 0.0f;
-                for (int p = 0; p < valid_count; p++)
-                    sum_exp += std::exp(sim_buf[p] - max_sim);
-
-                float inv_sum = 1.0f / (sum_exp + 1e-10f);
-
-                // Weighted aggregation
-                std::memset(dst, 0, C * sizeof(float));
-                int pixel_idx = 0;
-
-                for (int di = -radius; di <= radius; di++) {
-                    for (int dj = -radius; dj <= radius; dj++) {
-                        const int py = cy + di * stride_h;
-                        const int px = cx + dj * stride_w;
-
-                        if (py >= 0 && py < H && px >= 0 && px < W) {
-                            const float* pixel = elem + b * C * H * W + py * C * W + px * C;
-                            const float weight = std::exp(sim_buf[pixel_idx] - max_sim) * inv_sum;
-
-                            for (int c = 0; c < C; c++)
-                                dst[c] += weight * pixel[c];
-
-                            pixel_idx++;
+                for (int di = 0; di < win_h; di++) {
+                    for (int dj = 0; dj < win_w; dj++) {
+                        const int py = top + di;
+                        const int px = left + dj;
+                        const int k = di * win_w + dj;
+                        if (py < 0 || py >= H || px < 0 || px >= W) continue;
+                        const float wgt = std::exp(sim_buf[k] - max_sim) * inv_sum;
+                        for (int c = 0; c < C; c++) {
+                            float p_val = elem[b * elem_stride + c * elem_sz + py * W + px];
+                            result[b * clst_stride + c * clst_sz + i * w_s + j] += wgt * p_val;
                         }
+                    }
+                }
+
+                if (normalize) {
+                    float norm = 0.0f;
+                    for (int c = 0; c < C; c++) {
+                        float val = result[b * clst_stride + c * clst_sz + i * w_s + j];
+                        norm += val * val;
+                    }
+                    norm = std::sqrt(norm > 1e-8f ? norm : 1e-8f);
+                    const float inv = 1.0f / norm;
+                    for (int c = 0; c < C; c++) {
+                        result[b * clst_stride + c * clst_sz + i * w_s + j] *= inv;
                     }
                 }
             }
@@ -129,7 +130,10 @@ torch::Tensor spixrwkv7::kernel::update_clusters_generic(
 
 // ===================================================================
 // Generic pixel-to-superpixel assignment
-// For each pixel, compute similarity with nearby cluster centers
+// For each pixel, compute raw dot-product similarity with the (2r+1)^2
+// neighbouring cluster centers (zero-padded / masked when out of bounds),
+// divide by tau, softmax over the candidate centers. Output (B, nn*nn, H, W).
+// Matches compute_elem_to_center_assignment in spixrwkv7/data/diff_slic.py.
 // ===================================================================
 
 torch::Tensor spixrwkv7::kernel::assign_pixels_generic(
@@ -145,67 +149,76 @@ torch::Tensor spixrwkv7::kernel::assign_pixels_generic(
     const auto h_s = clst_feats.size(2);
     const auto w_s = clst_feats.size(3);
     const int nn = 2 * radius + 1;
+    const int64_t nchan = (int64_t)nn * nn;
 
-    auto out = torch::empty({B, nn * nn, H, W}, elem_feats.options());
-
+    auto out = torch::empty({B, nchan, H, W}, elem_feats.options());
     const float* elem = elem_feats.data_ptr<float>();
     const float* clst = clst_feats.data_ptr<float>();
     float* result = out.data_ptr<float>();
 
+    const int64_t elem_sz = (int64_t)H * W;
+    const int64_t elem_stride = C * elem_sz;
+    const int64_t clst_sz = (int64_t)h_s * w_s;
+    const int64_t clst_stride = C * clst_sz;
+    const int64_t out_stride = nchan * elem_sz;
+
+    TORCH_CHECK(nn <= 15, "radius is too large for stack buffer");
+
+    #pragma omp parallel for collapse(3)
     for (int64_t b = 0; b < B; b++) {
-        for (int y = 0; y < H; y++) {
-            for (int x = 0; x < W; x++) {
-                // Cluster grid position for this pixel
+        for (int64_t y = 0; y < H; y++) {
+            for (int64_t x = 0; x < W; x++) {
                 const int ci = y / stride_h;
                 const int cj = x / stride_w;
 
-                const float* pixel = elem + b * C * H * W + y * C * W + x * C;
-
-                // Compute similarities with nearby cluster centers
-                float sim_buf[81]; // max 9x9
-                int valid = 0;
-                int valid_idx[81]; // maps sim index to (di,dj)
-
+                float sim_buf[225];
+                int valid[225];
+                float max_sim = -1e30f;
                 for (int di = -radius; di <= radius; di++) {
                     for (int dj = -radius; dj <= radius; dj++) {
                         const int ni = ci + di;
                         const int nj = cj + dj;
-
+                        const int flat = (di + radius) * nn + (dj + radius);
                         if (ni >= 0 && ni < h_s && nj >= 0 && nj < w_s) {
-                            const float* center = clst + b * C * h_s * w_s + ni * C * w_s + nj * C;
-
                             float sim = 0.0f;
-                            for (int c = 0; c < C; c++)
-                                sim += pixel[c] * center[c];
-
-                            sim_buf[valid] = sim / tau;
-                            valid_idx[valid] = (di + radius) * nn + (dj + radius); // flat index
-                            valid++;
+                            for (int c = 0; c < C; c++) {
+                                float p_val = elem[b * elem_stride + c * elem_sz + y * W + x];
+                                float c_val = clst[b * clst_stride + c * clst_sz + ni * w_s + nj];
+                                sim += p_val * c_val;
+                            }
+                            if (sim == 0.0f) sim = -1e9f;
+                            else sim = sim / tau;
+                            sim_buf[flat] = sim;
+                            valid[flat] = 1;
+                        } else {
+                            sim_buf[flat] = -1e9f;
+                            valid[flat] = 0;
                         }
+                        if (valid[flat] && sim_buf[flat] > max_sim) max_sim = sim_buf[flat];
                     }
                 }
 
-                // Softmax
-                float max_sim = sim_buf[0];
-                for (int p = 1; p < valid; p++)
-                    max_sim = std::max(max_sim, sim_buf[p]);
-
                 float sum_exp = 0.0f;
-                for (int p = 0; p < valid; p++)
-                    sum_exp += std::exp(sim_buf[p] - max_sim);
+                for (int di = -radius; di <= radius; di++) {
+                    for (int dj = -radius; dj <= radius; dj++) {
+                        const int flat = (di + radius) * nn + (dj + radius);
+                        if (valid[flat]) {
+                            const float sim = sim_buf[flat] - max_sim;
+                            sum_exp += std::exp(sim);
+                        }
+                    }
+                }
+                const float inv_sum = 1.0f / (sum_exp + 1e-10f);
 
-                float inv_sum = 1.0f / (sum_exp + 1e-10f);
-
-                // Fill output — all nn*nn positions for this pixel
-                float* dst = result + b * nn * nn * H * W + y * nn * nn * W + x * nn * nn;
-
-                // Zero out all positions first
-                std::memset(dst, 0, nn * nn * sizeof(float));
-
-                // Fill valid positions
-                for (int p = 0; p < valid; p++) {
-                    int flat_idx = valid_idx[p];
-                    dst[flat_idx] = std::exp(sim_buf[p] - max_sim) * inv_sum;
+                for (int di = -radius; di <= radius; di++) {
+                    for (int dj = -radius; dj <= radius; dj++) {
+                        const int flat = (di + radius) * nn + (dj + radius);
+                        if (valid[flat]) {
+                            result[b * out_stride + flat * elem_sz + y * W + x] = std::exp(sim_buf[flat] - max_sim) * inv_sum;
+                        } else {
+                            result[b * out_stride + flat * elem_sz + y * W + x] = 0.0f;
+                        }
+                    }
                 }
             }
         }
@@ -215,7 +228,15 @@ torch::Tensor spixrwkv7::kernel::assign_pixels_generic(
 }
 
 // ===================================================================
-// Python-facing dispatcher — wraps with CPU feature detection
+// Python-facing dispatcher — wraps with CPU feature detection.
+//
+// The diffSLIC operation is not on the model's critical path, and the
+// previous AVX2/AVX512 variants duplicated the generic algorithm and
+// drifted out of sync with the PyTorch reference. To guarantee correctness
+// the dispatcher always uses the single authoritative generic
+// implementation above; the optimized builder's speed comes from the
+// recurrent-scan SIMD path. The AVX2/AVX512 translation units delegate to
+// these generics.
 // ===================================================================
 
 namespace spixrwkv7 {
@@ -228,7 +249,6 @@ torch::Tensor diff_slic_update_clusters(
     int radius, float tau,
     bool normalize)
 {
-    // Shape and dtype checks
     TORCH_CHECK(elem_feats.dim() == 4, "elem_feats must be 4D (B, C, H, W)");
     TORCH_CHECK(clst_feats.dim() == 4, "clst_feats must be 4D (B, C, h, w)");
     TORCH_CHECK(elem_feats.dtype() == torch::kFloat32, "elem_feats must be float32");
@@ -237,24 +257,8 @@ torch::Tensor diff_slic_update_clusters(
     TORCH_CHECK(elem_feats.size(1) == clst_feats.size(1), "Channel mismatch");
     TORCH_CHECK(elem_feats.is_contiguous(), "elem_feats must be contiguous");
     TORCH_CHECK(clst_feats.is_contiguous(), "clst_feats must be contiguous");
-
-#ifdef __AVX512F__
-    if (cpu::CPUFeatures::hasAVX512F()) {
-        return update_clusters_avx512(elem_feats, clst_feats,
-                                       stride_h, stride_w,
-                                       radius, tau, normalize);
-    }
-#endif
-#ifdef __AVX2__
-    if (cpu::CPUFeatures::hasAVX2()) {
-        return update_clusters_avx2(elem_feats, clst_feats,
-                                     stride_h, stride_w,
-                                     radius, tau, normalize);
-    }
-#endif
     return update_clusters_generic(elem_feats, clst_feats,
-                                    stride_h, stride_w,
-                                    radius, tau, normalize);
+                                    stride_h, stride_w, radius, tau, normalize);
 }
 
 torch::Tensor diff_slic_assign_pixels(
@@ -269,19 +273,6 @@ torch::Tensor diff_slic_assign_pixels(
     TORCH_CHECK(clst_feats.dtype() == torch::kFloat32, "clst_feats must be float32");
     TORCH_CHECK(elem_feats.is_contiguous(), "elem_feats must be contiguous");
     TORCH_CHECK(clst_feats.is_contiguous(), "clst_feats must be contiguous");
-
-#ifdef __AVX512F__
-    if (cpu::CPUFeatures::hasAVX512F()) {
-        return assign_pixels_avx512(elem_feats, clst_feats,
-                                     stride_h, stride_w, radius, tau);
-    }
-#endif
-#ifdef __AVX2__
-    if (cpu::CPUFeatures::hasAVX2()) {
-        return assign_pixels_avx2(elem_feats, clst_feats,
-                                   stride_h, stride_w, radius, tau);
-    }
-#endif
     return assign_pixels_generic(elem_feats, clst_feats,
                                   stride_h, stride_w, radius, tau);
 }

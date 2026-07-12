@@ -62,3 +62,31 @@ Key results:
 1. Re-run `tasks/segmentation/ade20k/sanity.py --compare-variants spix conv` on a network-stable cache/environment if you want convergence-speed insight.
 2. Use default `img_size` for each config; do not benchmark `conv_tiny` at 512px unless that is the intended operating point.
 3. If you want, I can next prepare a smaller cached ADE20K local parquet path or switch to the HumorDB inference pipeline for quality comparison.
+
+## TDD Refactor, C++ Kernels Fix and Verification (July 2026 Update)
+
+This update documents the completion of the TDD-focused refactor, bug fixes, and rigorous validation of C++ kernel parity.
+
+### 1. TDD Refactor & Configuration Realignment
+- **Unified Backbone Loading**: All model construction routes through the optimized `create_optimized_vision_rwkv7` builder (which maps to `create_vision_rwkv7` signature).
+- **Shared Config Loader**: Added `tasks/config_loader.py` exposing `load_model_config` and `build_backbone`, centralizing config resolution via `configs/model/*.yaml`.
+- **Refactored Task Scripts**: Refactored `tasks/segmentation/ade20k/sanity.py`, `tasks/segmentation/ade20k/train.py`, and `tasks/classification/humordb/train.py` to use `tasks/config_loader.py`, eliminating the local scale preset dicts (`_SCALES`) and `resolve_scale` blocks. Overrides from the command line are cleanly applied on top of the loaded YAML configurations.
+- **Orphaned Task Configs Removed**: Deleted the unused/orphaned `configs/task/` directory.
+
+### 2. C++ `diff_slic` Stride & Layout Bug Fix
+- **Root Cause**: The C++ generic `diff_slic` implementations (`update_clusters_generic` and `assign_pixels_generic`) in `spixrwkv7/kernels/cpp/diff_slic_kernel.cpp` incorrectly assumed a channel-last layout `(B, H, W, C)`. However, PyTorch and the rest of the codebase use contiguous channel-first layouts `(B, C, H, W)`. This layout mismatch caused index calculations to retrieve scrambled values, producing massive numerical differences from the reference PyTorch implementation.
+- **Resolution**: Redesigned the C++ indexing calculations to respect the contiguous `(B, C, H, W)` layout:
+  - Element/pixel features: `elem[b * elem_stride + c * elem_sz + y * W + x]`
+  - Cluster features: `clst[b * clst_stride + c * clst_sz + ni * w_s + nj]`
+  - Assignment features: `result[b * out_stride + flat * elem_sz + y * W + x]`
+  - Stack allocation of size 225 replaced heap vector instantiation in the pixel loop to avoid OpenMP thread contention.
+
+### 3. Verification & Validation Results
+- **Parity Verification**: Running `pytest tests/test_kernels/test_kernel_parity.py -v` confirmed 4/4 passing tests:
+  - `test_rwkv7_recurrent_scan_cpp_matches_pytorch` -> PASS
+  - `test_rwkv7_recurrent_scan_cpp_matches_pytorch_masked` -> PASS
+  - `test_diff_slic_update_clusters_cpp_matches_pytorch` -> PASS
+  - `test_diff_slic_assign_pixels_cpp_matches_pytorch` -> PASS
+- **Global Test Suite**: Run `uv run pytest` successfully, achieving **132/132 passing tests**.
+- **Correctness Demo**: Running `scripts/demo.py --use-cpp` completed successfully on full-scale `512x512` input images in ~340s. Outputs are fully finite, deterministic, and verify the C++ optimized recurrent scans and diffSLIC operations are fully functional in high-resolution settings.
+

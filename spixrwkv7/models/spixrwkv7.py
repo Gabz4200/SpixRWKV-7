@@ -1152,7 +1152,7 @@ class Vision_RWKV7(nn.Module):
         output_cls_token: bool = False,
         register_tokens: int = 0,  # DINOv2-style register tokens
         scatter_output: bool = False,
-        num_superpixels: int = 196,
+        num_superpixels: int = 256,
         spixel_size: Optional[int] = None,
         diff_slic_iters: int = 5,
         compactness: float = 0.5,
@@ -1509,7 +1509,7 @@ def create_vision_rwkv7(
     with_cls_token: bool = False,
     output_cls_token: bool = False,
     scatter_output: bool = False,
-    num_superpixels: int = 196,
+    num_superpixels: int = 256,
     spixel_size: Optional[int] = None,
     diff_slic_iters: int = 5,
     compactness: float = 0.5,

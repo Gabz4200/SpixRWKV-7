@@ -26,6 +26,7 @@ from spixrwkv7.kernels.optimized_vision import (  # noqa: E402
 )
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7  # noqa: E402
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7  # noqa: E402
+from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision_rwkv7  # noqa: E402
 
 # Global image size override (set from CLI --img-size)
 _IMG_SIZE: int = 512
@@ -54,12 +55,15 @@ def build_model(depth, embed_dims, num_heads, num_superpixels, device,
             out_indices=[depth - 1],
             with_cls_token=False,
             output_cls_token=False,
+            register_tokens=0,
             scatter_output=False,
             drop_path_rate=0.0,
             codebook_size=codebook_size,
             downsample_factor=downsample_factor,
             latent_dim=latent_dim,
             num_res_blocks=num_res_blocks,
+            use_ema=False,
+            beta=0.25,
             norm_layer="rmsnorm",
             act_layer="swiglu",
         ).to(device)
@@ -82,6 +86,30 @@ def build_model(depth, embed_dims, num_heads, num_superpixels, device,
             drop_path_rate=0.0,
             norm_layer="rmsnorm",
             act_layer="swiglu",
+        ).to(device)
+        backbone._init_weights()
+    elif model_type == "gnn":
+        backbone = create_gnn_vision_rwkv7(
+            img_size=img_size,
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            depth=depth,
+            init_values=1e-5,
+            final_norm=True,
+            out_indices=[depth - 1],
+            with_cls_token=False,
+            output_cls_token=False,
+            scatter_output=False,
+            num_superpixels=num_superpixels,
+            diff_slic_iters=1,
+            compactness=0.5,
+            drop_path_rate=0.0,
+            norm_layer="rmsnorm",
+            act_layer="swiglu",
+            downsample_factor=downsample_factor,
+            gnn_conv="gatv2",
+            gnn_heads=4,
+            gnn_aggr="mean",
         ).to(device)
         backbone._init_weights()
     else:
@@ -306,7 +334,7 @@ if __name__ == "__main__":
     parser.add_argument("--seeds", action="store_true")
     parser.add_argument("--grad-deep", action="store_true")
     parser.add_argument("--no-head", action="store_true")
-    parser.add_argument("--model-type", choices=["spix", "vq", "conv"], default="spix",
+    parser.add_argument("--model-type", choices=["spix", "vq", "conv", "gnn"], default="spix",
                         help="Backbone type (default: spix)")
     parser.add_argument("--codebook-size", type=int, default=1024,
                         help="VQ codebook size")
@@ -332,7 +360,7 @@ if __name__ == "__main__":
     from spixrwkv7.utils import redirect_stdout_tee
     os.makedirs('results', exist_ok=True)
     with redirect_stdout_tee('results/diagnose_training_downsample.txt'):
-        factors = args.downsample_factors if args.model_type == "spix" else [None]
+        factors = args.downsample_factors if args.model_type in ("spix", "gnn") else [None]
         for df in factors:
             if args.model_type == "spix":
                 log(f"=== SWEEP RUN: downsample_factor = {df} ===")

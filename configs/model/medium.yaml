@@ -1,7 +1,12 @@
 # Medium model config (~57M params, depth=12, 196 superpixels)
-# Competitive with ViT-B/16
+# Competitive with ViT-B/16. img_size=-1 => consume the image at its NATIVE
+# resolution (the transform passes the original height through, no resize). This
+# tier is meant for full-res inputs; the backbone still processes only 196
+# tokens, so higher native resolution only costs the front-end embedding.
+# Requires native height >= ~256 so the segmentation grid (native/df) fits 196
+# superpixels. df=16 keeps segmentation cheap.
 model:
-  img_size: 512
+  img_size: -1
   embed_dims: 512
   num_heads: 8
   depth: 12
@@ -9,11 +14,21 @@ model:
   init_values: 1.0e-5
   final_norm: true
   out_indices: [-1]
-  num_superpixels: 196
+  with_cls_token: false
+  output_cls_token: false
+  register_tokens: 0
   scatter_output: true
+  num_superpixels: 196
+  spixel_size: null
   diff_slic_iters: 5
   compactness: 0.5
   norm_layer: rmsnorm
   act_layer: swiglu
-  codebook_size: 1024
+  spixel_backend: diff_slic
+  use_attnres: false
+  attnres_mode: block
+  attnres_gate_type: bias
+  attnres_num_blocks: 8
+  attnres_recency_bias_init: 10.0
+  use_jit: false
   downsample_factor: 16

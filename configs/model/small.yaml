@@ -1,7 +1,10 @@
 # Small model config (~18M params, depth=6, 144 superpixels)
-# Baseline for meaningful representation learning
+# Baseline for representation learning. A large 1024px input lifts embedding
+# detail well past ViT's 224 while the backbone still sees only 144 tokens
+# (backbone FLOPS are superpixel-bound, not resolution-bound). df=16 keeps the
+# segmentation grid bounded (~64 cells/side) and cheap.
 model:
-  img_size: 224
+  img_size: 1024
   embed_dims: 256
   num_heads: 4
   depth: 6
@@ -9,11 +12,21 @@ model:
   init_values: 1.0e-5
   final_norm: true
   out_indices: [-1]
-  num_superpixels: 144
+  with_cls_token: false
+  output_cls_token: false
+  register_tokens: 0
   scatter_output: true
+  num_superpixels: 144
+  spixel_size: null
   diff_slic_iters: 5
   compactness: 0.5
   norm_layer: rmsnorm
   act_layer: swiglu
-  codebook_size: 1024
+  spixel_backend: diff_slic
+  use_attnres: false
+  attnres_mode: block
+  attnres_gate_type: bias
+  attnres_num_blocks: 8
+  attnres_recency_bias_init: 10.0
+  use_jit: false
   downsample_factor: 16

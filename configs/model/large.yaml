@@ -1,7 +1,10 @@
-# Large model config (~99.5M params, depth=12, 196 superpixels)
-# Competitive with ViT-L/16
+# Large model config (~99.5M params, depth=12, 256 superpixels)
+# Competitive with ViT-L/16. img_size=-1 => native-resolution input (see the
+# medium note). 256 superpixels give the biggest backbone the most spatial
+# tokens while keeping compute superpixel-bound. Requires native height >= ~256
+# so the segmentation grid (native/df) fits 256 superpixels. df=16.
 model:
-  img_size: 224
+  img_size: -1
   embed_dims: 768
   num_heads: 12
   depth: 12
@@ -9,11 +12,21 @@ model:
   init_values: 1.0e-5
   final_norm: true
   out_indices: [-1]
-  num_superpixels: 196
+  with_cls_token: false
+  output_cls_token: false
+  register_tokens: 0
   scatter_output: true
+  num_superpixels: 256
+  spixel_size: null
   diff_slic_iters: 5
   compactness: 0.5
   norm_layer: rmsnorm
   act_layer: swiglu
-  codebook_size: 1024
+  spixel_backend: diff_slic
+  use_attnres: false
+  attnres_mode: block
+  attnres_gate_type: bias
+  attnres_num_blocks: 8
+  attnres_recency_bias_init: 10.0
+  use_jit: false
   downsample_factor: 16

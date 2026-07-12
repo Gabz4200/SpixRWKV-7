@@ -19,6 +19,7 @@ from spixrwkv7.kernels.optimized_vision import (  # noqa: E402
 )
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7  # noqa: E402
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7  # noqa: E402
+from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision_rwkv7  # noqa: E402
 
 # Inspired by: https://arxiv.org/abs/2109.08203
 # Recommended: run 5-10 seeds, report mean ± std
@@ -33,14 +34,15 @@ def main():
     parser.add_argument("--embed-dims", type=int, default=192)
     parser.add_argument("--num-heads", type=int, default=3)
     parser.add_argument("--depth", type=int, default=12)
-    parser.add_argument("--num-superpixels", type=int, default=196)
+    parser.add_argument("--num-superpixels", type=int, default=256)
     parser.add_argument("--diff-slic-iters", type=int, default=5)
     parser.add_argument("--norm-layer", type=str, default="rmsnorm")
     parser.add_argument("--act-layer", type=str, default="swiglu")
     parser.add_argument("--spixel-backend", type=str, default="diff_slic", choices=["diff_slic", "grid", "slic", "slico", "lnsnet"])
     parser.add_argument("--use-attnres", action="store_true", help="Enable Attention Residuals")
+    parser.add_argument("--use-cpp", action="store_true", help="Use optimized C++ kernels")
     parser.add_argument("--use-jit", action="store_true", help="Enable torch.compile JIT")
-    parser.add_argument("--model-type", choices=["spix", "vq", "conv"], default="spix",
+    parser.add_argument("--model-type", choices=["spix", "vq", "conv", "gnn"], default="spix",
                         help="Backbone type (default: spix)")
     parser.add_argument("--codebook-size", type=int, default=1024,
                         help="VQ codebook size")
@@ -77,6 +79,7 @@ def main():
                 act_layer=args.act_layer,
                 spixel_backend=args.spixel_backend,
                 use_attnres=args.use_attnres,
+                use_cpp=args.use_cpp,
                 use_jit=args.use_jit,
                 conv_stem_channels=(32, 64, 128),
                 conv_stem_kernel_sizes=(3, 5, 5),
@@ -93,15 +96,45 @@ def main():
                 init_values=1e-5,
                 final_norm=True,
                 out_indices=[args.depth - 1],
+                with_cls_token=False,
+                output_cls_token=False,
+                register_tokens=0,
                 scatter_output=True,
+                drop_path_rate=0.0,
                 codebook_size=args.codebook_size,
                 downsample_factor=args.downsample_factor,
                 latent_dim=args.latent_dim,
                 num_res_blocks=args.num_res_blocks,
+                use_ema=False,
+                beta=0.25,
                 norm_layer=args.norm_layer,
                 act_layer=args.act_layer,
                 use_attnres=args.use_attnres,
+                attnres_mode="block",
+                attnres_gate_type="bias",
+                attnres_num_blocks=8,
+                attnres_recency_bias_init=10.0,
                 use_jit=args.use_jit,
+            )
+        elif args.model_type == "gnn":
+            model = create_gnn_vision_rwkv7(
+                img_size=args.img_size,
+                embed_dims=args.embed_dims,
+                num_heads=args.num_heads,
+                depth=args.depth,
+                init_values=1e-5,
+                final_norm=True,
+                out_indices=[args.depth - 1],
+                num_superpixels=args.num_superpixels,
+                scatter_output=True,
+                diff_slic_iters=args.diff_slic_iters,
+                norm_layer=args.norm_layer,
+                act_layer=args.act_layer,
+                spixel_backend=args.spixel_backend,
+                gnn_conv="gatv2",
+                gnn_heads=4,
+                gnn_aggr="mean",
+                use_cpp=args.use_cpp,
             )
         else:
             model = _create_model(
@@ -119,6 +152,7 @@ def main():
                 act_layer=args.act_layer,
                 spixel_backend=args.spixel_backend,
                 use_attnres=args.use_attnres,
+                use_cpp=args.use_cpp,
                 use_jit=args.use_jit,
             )
 

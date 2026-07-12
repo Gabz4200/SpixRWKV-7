@@ -1,0 +1,34 @@
+# VQ Tiny model config (~0.5M params, depth=2, 512 codebook entries, downsample_factor=16)
+# VQ-RWKV7 backbones with VQ-VAE tokenization. Compared to superpixel spix variants:
+# - No superpixels, no diffSLIC
+# - Codebook size: 512 (128×128 grid at df=16), latent_dim = embed_dims, token count = grid cells
+# - scatter_output=False (VQ tokenization produces naturally dense grid)
+# - Same img_size ladder, downsample_factor=16 for consistent block-wise segmentations
+# - note: img_size=-1 above means "native resolution"; VQ uses it directly, not for spix
+
+model:
+  img_size: 512
+  embed_dims: 128
+  num_heads: 2
+  depth: 2
+  drop_path_rate: 0.0
+  init_values: 0.0
+  final_norm: true
+  out_indices: [-1]
+  with_cls_token: false
+  output_cls_token: false
+  register_tokens: 0
+  scatter_output: false
+  codebook_size: 512
+  downsample_factor: 16
+  latent_dim: null
+  num_res_blocks: 2
+  use_ema: false
+  beta: 0.25
+  norm_layer: rmsnorm
+  act_layer: swiglu
+  use_attnres: false
+  attnres_mode: block
+  attnres_gate_type: bias
+  attnres_num_blocks: 8
+  attnres_recency_bias_init: 10.0

@@ -32,44 +32,13 @@ from datasets import load_dataset
 from torch.utils.data import DataLoader, IterableDataset
 
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
-from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
+from tasks.config_loader import load_model_config, build_backbone
 
 # ---------------------------------------------------------------------------
 # ADE20K constants
 # ---------------------------------------------------------------------------
 _IGNORE_INDEX = 255
 _CHECKPOINT_DIR = Path(__file__).resolve().parent.parent.parent.parent / "checkpoints" / "ade20k"
-
-
-# ---------------------------------------------------------------------------
-# Scale presets
-# ---------------------------------------------------------------------------
-_SCALES = {
-    "tiny": {
-        "embed_dims": 128, "num_heads": 2, "depth": 4,
-        "num_superpixels": 36, "img_size": 64,
-    },
-    "small": {
-        "embed_dims": 384, "num_heads": 6, "depth": 8,
-        "num_superpixels": 64, "img_size": 112,
-    },
-    "medium": {
-        "embed_dims": 576, "num_heads": 9, "depth": 12,
-        "num_superpixels": 128, "img_size": 112,
-    },
-    "100m": {
-        "embed_dims": 768, "num_heads": 12, "depth": 12,
-        "num_superpixels": 196, "img_size": 224,
-    },
-}
-
-
-def resolve_scale(cfg: dict) -> dict:
-    base = _SCALES.get(cfg.get("scale", "tiny"), _SCALES["tiny"]).copy()
-    for k in ("embed_dims", "num_heads", "depth", "num_superpixels", "img_size"):
-        if k in cfg and cfg[k] is not None:
-            base[k] = cfg[k]
-    return base
 
 
 # =====================================================================
@@ -233,24 +202,19 @@ class SegHead(nn.Module):
 class ADE20KSegModel(nn.Module):
     """SpixRWKV-7 backbone + 1x1 conv segmentation head."""
 
-    def __init__(self, config: dict, num_classes: int):
+    def __init__(self, config: dict, num_classes: int, model_type: str = "spix"):
         super().__init__()
-        self.backbone = _create_model(
-            img_size=config["img_size"],
-            embed_dims=config["embed_dims"],
-            num_heads=config["num_heads"],
-            depth=config["depth"],
-            num_superpixels=config["num_superpixels"],
-            drop_path_rate=config.get("drop_path_rate", 0.0),
-            scatter_output=True,
-            diff_slic_iters=config.get("diff_slic_iters", 1),
-            compactness=config.get("compactness", 0.5),
-            init_values=1e-5,
-        )
+        self.model_type = model_type
+        # Force scatter_output to True for dense prediction/segmentation task
+        config = config.copy()
+        config["scatter_output"] = True
+        self.backbone = build_backbone(model_type, config)
         self.seg_head = SegHead(config["embed_dims"], num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         features = self.backbone(x)
+        if isinstance(features, (tuple, list)):
+            features = features[-1]
         return self.seg_head(features)
 
 
@@ -327,7 +291,11 @@ def main() -> None:
         description="Train SpixRWKV-7 on ADE20K semantic segmentation"
     )
     parser.add_argument(
-        "--scale", type=str, default="tiny", choices=list(_SCALES.keys()),
+        "--scale", type=str, default="tiny", choices=["tiny", "small", "medium", "large"],
+    )
+    parser.add_argument(
+        "--model-type", type=str, default="spix", choices=["spix", "conv", "vq", "gnn"],
+        help="Model variant type"
     )
     parser.add_argument("--embed-dims", type=int, default=None)
     parser.add_argument("--num-heads", type=int, default=None)
@@ -370,20 +338,30 @@ def main() -> None:
 
     device = torch.device("cpu")
 
-    cfg = resolve_scale({
-        "scale": args.scale, "embed_dims": args.embed_dims,
-        "num_heads": args.num_heads, "depth": args.depth,
-        "num_superpixels": args.num_superpixels, "img_size": args.img_size,
-        "drop_path_rate": args.drop_path_rate, "diff_slic_iters": args.diff_slic_iters,
-    })
+    cfg = load_model_config(args.model_type, args.scale)
+    if args.embed_dims is not None:
+        cfg["embed_dims"] = args.embed_dims
+    if args.num_heads is not None:
+        cfg["num_heads"] = args.num_heads
+    if args.depth is not None:
+        cfg["depth"] = args.depth
+    if args.num_superpixels is not None:
+        cfg["num_superpixels"] = args.num_superpixels
+    if args.img_size is not None:
+        cfg["img_size"] = args.img_size
+    if args.drop_path_rate is not None:
+        cfg["drop_path_rate"] = args.drop_path_rate
+    if args.diff_slic_iters is not None:
+        cfg["diff_slic_iters"] = args.diff_slic_iters
 
     print("=" * 72)
     print("ADE20K Segmentation Training")
     print("=" * 72)
     print(f"  Scale:            {args.scale}")
+    print(f"  Model variant:    {args.model_type}")
     print(f"  Model:            embed_dims={cfg['embed_dims']}  "
           f"num_heads={cfg['num_heads']}  depth={cfg['depth']}")
-    print(f"  Superpixels:      {cfg['num_superpixels']}  img={cfg['img_size']}")
+    print(f"  Superpixels:      {cfg.get('num_superpixels', 'N/A')}  img={cfg['img_size']}")
     print(f"  Batch:            {args.batch_size}   LR: {args.lr}")
     print(f"  Max train:        {args.max_train_samples or 'all (25574)'}")
     print(f"  Max val:          {args.max_val_samples}")
@@ -448,12 +426,12 @@ def main() -> None:
     print("-" * 72)
 
     # --- Model ---
-    model = ADE20KSegModel(cfg, NUM_CLASSES).to(device)
+    model = ADE20KSegModel(cfg, NUM_CLASSES, model_type=args.model_type).to(device)
     total_params = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     head_params = sum(p.numel() for p in model.seg_head.parameters())
     print(f"  Model params:     {total_params:,} total  ({trainable:,} trainable)")
-    print(f"  Seg head:         {head_params:,}  ({NUM_CLASSES} classes x {cfg['embed_dims']})")
+    print(f"  Seg head:         {head_params:,}  ({NUM_CLASSES} classes x {model.backbone.embed_dims})")
     print()
 
     optimizer = torch.optim.AdamW(

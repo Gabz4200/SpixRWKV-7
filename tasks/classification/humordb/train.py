@@ -33,8 +33,7 @@ from datasets import load_dataset
 from torch.utils.data import DataLoader, Dataset
 
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
-from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
-from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
+from tasks.config_loader import load_model_config, build_backbone
 
 # ---------------------------------------------------------------------------
 # Checkpoint directory
@@ -329,43 +328,47 @@ def main() -> None:
     )
     # Model hyper-parameters
     parser.add_argument(
-        "--embed-dims", type=int, default=128,
+        "--scale", type=str, default="tiny", choices=["tiny", "small", "medium", "large"],
+        help="Scale preset from configs/model"
+    )
+    parser.add_argument(
+        "--embed-dims", type=int, default=None,
         help="Embedding dimension (must be multiple of HEAD_SIZE=64)",
     )
     parser.add_argument(
-        "--num-heads", type=int, default=2,
+        "--num-heads", type=int, default=None,
         help="Number of attention heads (embed_dims // HEAD_SIZE)"
     )
     parser.add_argument(
-        "--depth", type=int, default=4,
+        "--depth", type=int, default=None,
         help="Number of Vision_RWKV7_Block layers"
     )
     parser.add_argument(
-        "--img-size", type=int, default=64,
+        "--img-size", type=int, default=None,
         help="Input image height in pixels (proportional width)"
     )
     parser.add_argument(
-        "--num-superpixels", type=int, default=36,
+        "--num-superpixels", type=int, default=None,
         help="Number of superpixel tokens (~6x6 grid for speed)"
     )
     parser.add_argument(
-        "--diff-slic-iters", type=int, default=1,
+        "--diff-slic-iters", type=int, default=None,
         help="diffSLIC optimization iterations (1=faster, 5=better)"
     )
     parser.add_argument(
-        "--compactness", type=float, default=0.5,
+        "--compactness", type=float, default=None,
         help="diffSLIC compactness parameter"
     )
     parser.add_argument(
-        "--drop-path-rate", type=float, default=0.1,
+        "--drop-path-rate", type=float, default=None,
         help="Stochastic depth drop rate (regularization)"
     )
     parser.add_argument(
-        "--init-values", type=float, default=1e-5,
+        "--init-values", type=float, default=None,
         help="Weight initialization scale for RWKV params"
     )
     parser.add_argument(
-        "--model-type", choices=["spix", "vq"], default="spix",
+        "--model-type", choices=["spix", "vq", "conv", "gnn"], default="spix",
         help="Backbone type (default: spix)"
     )
     parser.add_argument(
@@ -454,50 +457,36 @@ def main() -> None:
     print("  SpixRWKV-7 — HumorDB Funniness Regression")
     print("=" * 72)
 
-    if args.model_type == "vq":
-        backbone = create_vq_rwkv7(
-            img_size=args.img_size,
-            embed_dims=args.embed_dims,
-            num_heads=args.num_heads,
-            depth=args.depth,
-            init_values=args.init_values,
-            final_norm=True,
-            out_indices=[args.depth - 1],
-            with_cls_token=False,
-            output_cls_token=False,
-            scatter_output=False,
-            drop_path_rate=args.drop_path_rate,
-            codebook_size=args.codebook_size,
-            downsample_factor=args.downsample_factor,
-            latent_dim=args.latent_dim,
-            num_res_blocks=args.num_res_blocks,
-            norm_layer="rmsnorm",
-            act_layer="swiglu",
-        ).to(device)
-        backbone._init_weights()
-    else:
-        backbone = _create_model(
-            img_size=args.img_size,
-            embed_dims=args.embed_dims,
-            num_heads=args.num_heads,
-            depth=args.depth,
-            init_values=args.init_values,
-            final_norm=True,
-            out_indices=[args.depth - 1],
-            with_cls_token=False,
-            output_cls_token=False,
-            scatter_output=False,
-            num_superpixels=args.num_superpixels,
-            diff_slic_iters=args.diff_slic_iters,
-            compactness=args.compactness,
-            drop_path_rate=args.drop_path_rate,
-            norm_layer="rmsnorm",
-            act_layer="swiglu",
-        ).to(device)
+    cfg = load_model_config(args.model_type, args.scale)
+    if args.embed_dims is not None:
+        cfg["embed_dims"] = args.embed_dims
+    if args.num_heads is not None:
+        cfg["num_heads"] = args.num_heads
+    if args.depth is not None:
+        cfg["depth"] = args.depth
+    if args.num_superpixels is not None:
+        cfg["num_superpixels"] = args.num_superpixels
+    if args.img_size is not None:
+        cfg["img_size"] = args.img_size
+    if args.drop_path_rate is not None:
+        cfg["drop_path_rate"] = args.drop_path_rate
+    if args.diff_slic_iters is not None:
+        cfg["diff_slic_iters"] = args.diff_slic_iters
+    if args.init_values is not None:
+        cfg["init_values"] = args.init_values
+    if args.downsample_factor is not None:
+        cfg["downsample_factor"] = args.downsample_factor
+    if args.codebook_size is not None:
+        cfg["codebook_size"] = args.codebook_size
 
-        backbone._init_weights()
+    # Force scatter_output to False for classification task
+    cfg = cfg.copy()
+    cfg["scatter_output"] = False
 
-    model = HumorRegressor(backbone, embed_dims=args.embed_dims).to(device)
+    backbone = build_backbone(args.model_type, cfg).to(device)
+    backbone._init_weights()
+
+    model = HumorRegressor(backbone, embed_dims=cfg["embed_dims"]).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
     train_params = sum(

@@ -9,80 +9,38 @@ PART 1: MODEL SIZE COMPARISON
 
 --- TINY (factor=1.0) ---
 
---- TINY (factor=2.0) ---
-
---- TINY (factor=4.0) ---
-
 ======================================================================
 PART 2: RESOLUTION SWEEP
 ======================================================================
 
 ======================================================================
-RESOLUTION SWEEP FOR SMALL MODEL
+RESOLUTION SWEEP FOR TINY MODEL
 ======================================================================
-Model config: embed_dims=256, depth=6, num_heads=4
-Testing image sizes: [64, 128, 512, 1024]
+Model config: embed_dims=128, depth=2, num_heads=2
+Testing image sizes: [64]
 
   --- Image size: 64x64 ---
-    Vision RWKV-7 params: 7.86M
-    ViT params: 21.98M
-    RWKV-7 peak memory: 0.04MB
+    Vision RWKV-7 params: 0.51M
+    ViT params: 5.68M
+    RWKV-7 peak memory: 0.01MB
     ViT peak memory: 0.00MB
-    RWKV-7 Total: 1280.88ms
-    RWKV-7 diffSLIC: 33.38ms
-    RWKV-7 Backbone: 1247.51ms
-    ViT Total: 18.31ms
-    Speed ratio (ViT/RWKV-7): 0.01x
-
-  --- Image size: 128x128 ---
-    Vision RWKV-7 params: 7.86M
-    ViT params: 22.00M
-    RWKV-7 peak memory: 0.04MB
-    ViT peak memory: 0.00MB
-    RWKV-7 Total: 1309.35ms
-    RWKV-7 diffSLIC: 82.72ms
-    RWKV-7 Backbone: 1226.63ms
-    ViT Total: 38.56ms
-    Speed ratio (ViT/RWKV-7): 0.03x
-
-  --- Image size: 512x512 ---
-    Vision RWKV-7 params: 7.86M
-    ViT params: 22.37M
-    RWKV-7 peak memory: 0.04MB
-    ViT peak memory: 0.00MB
-    RWKV-7 Total: 2884.06ms
-    RWKV-7 diffSLIC: 1294.09ms
-    RWKV-7 Backbone: 1589.97ms
-    ViT Total: 766.34ms
-    Speed ratio (ViT/RWKV-7): 0.27x
-
-  --- Image size: 1024x1024 ---
-    Vision RWKV-7 params: 7.86M
-    ViT params: 23.55M
-    RWKV-7 peak memory: 0.04MB
-    ViT peak memory: 0.00MB
-    RWKV-7 Total: 7109.94ms
-    RWKV-7 diffSLIC: 4843.30ms
-    RWKV-7 Backbone: 2266.64ms
-    ViT Total: 7387.86ms
-    Speed ratio (ViT/RWKV-7): 1.04x
+    RWKV-7 Total: 17.59ms
+    RWKV-7 diffSLIC: 12.77ms
+    RWKV-7 Backbone: 4.81ms
+    ViT Total: 12.37ms
+    Speed ratio (ViT/RWKV-7): 0.70x
 
   Resolution sweep results:
   Img      RWKV-7       ViT          Speedup    Tokenizer %  Mem RWKV   Mem ViT   
   --------------------------------------------------------------------------
-  64       1280.88      18.31        0.01      x 2.6          0.04       0.00      
-  128      1309.35      38.56        0.03      x 6.3          0.04       0.00      
-  512      2884.06      766.34       0.27      x 44.9         0.04       0.00      
-  1024     7109.94      7387.86      1.04      x 68.1         0.04       0.00      
+  64       17.59        12.37        0.70      x 72.6         0.01       0.00      
 
 ======================================================================
 FINAL SUMMARY
 ======================================================================
 Size           Img    RWKV-7     ViT        Speedup 
 ----------------------------------------------------------------------
-tiny (df=1.0)  512    626.42     261.81     0.42    x
-tiny (df=2.0)  512    411.07     267.82     0.65    x
-tiny (df=4.0)  512    454.09     273.87     0.60    x
+tiny (df=1.0)  64     154.54     7.57       0.05    x
 
 ======================================================================
 DIFFSLIC BREAKDOWN ANALYSIS
@@ -93,35 +51,25 @@ relative to ViT becomes more significant.
 
 Size           Tokenizer %  Backbone %   Backbone/Tokenizer
 ----------------------------------------------------------------------
-tiny (df=1.0)  71.5         28.5         0.40              x
-tiny (df=2.0)  69.0         31.0         0.45              x
-tiny (df=4.0)  53.0         47.0         0.89              x
+tiny (df=1.0)  77.5         22.5         0.29              x
 
 ======================================================================
 MEMORY COMPARISON
 ======================================================================
 Size           RWKV-7 (MB)    ViT (MB)       Ratio     
 ----------------------------------------------------------------------
-tiny (df=1.0)  0.02           0.00           0.14      x
-tiny (df=2.0)  0.02           0.00           0.14      x
-tiny (df=4.0)  0.02           0.00           0.14      x
+tiny (df=1.0)  0.01           0.00           0.21      x
 
 ======================================================================
 ANALYSIS
 ======================================================================
-Fastest Vision RWKV-7: tiny (df=2.0) (411.07ms)
+Fastest Vision RWKV-7: tiny (df=1.0) (154.54ms)
 
 Parameter efficiency (time per M params):
-  tiny (df=1.0) : RWKV-7=811.3074ms/M, ViT=44.5564ms/M
-  tiny (df=2.0) : RWKV-7=532.3946ms/M, ViT=45.5788ms/M
-  tiny (df=4.0) : RWKV-7=588.1099ms/M, ViT=46.6087ms/M
+  tiny (df=1.0) : RWKV-7=305.9610ms/M, ViT=1.3313ms/M
 
 Key findings:
-  tiny (df=1.0): diffSLIC dominates (72% of time)
-    -> C++ diffSLIC kernel would significantly improve RWKV-7 speed
-  tiny (df=2.0): diffSLIC dominates (69% of time)
-    -> C++ diffSLIC kernel would significantly improve RWKV-7 speed
-  tiny (df=4.0): diffSLIC dominates (53% of time)
+  tiny (df=1.0): diffSLIC dominates (77% of time)
     -> C++ diffSLIC kernel would significantly improve RWKV-7 speed
 
 ======================================================================
@@ -131,10 +79,8 @@ VARIANT COMPARISON
 --- TINY ---
 Variant          Params(M)    Total(ms)    Tokenizer(ms)    Backbone(ms)   Speedup   
 --------------------------------------------------------------------------------
-spix (df=1.0)    0.77         626.42       448.16           178.26         0.42      x
-spix (df=2.0)    0.77         411.07       283.83           127.24         0.65      x
-spix (df=4.0)    0.77         454.09       240.51           213.58         0.60      x
-  -> Fastest variant: spix (411.07ms)
+gnn (df=1.0)     0.51         154.54       119.76           34.78          0.05      x
+  -> Fastest variant: gnn (154.54ms)
 
 ======================================================================
 WHY IS ViT FASTER ON CPU?

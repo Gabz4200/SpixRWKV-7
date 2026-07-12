@@ -1,0 +1,30 @@
+# VQ Large model config (~107M params, depth=12, 512 codebook, df=16)
+# Deepest VQ variant: same grid as conv large? No conv uses conv stem -> different, just keep img_size ladder.
+# To match conv_large: embed_dims=768, num_heads=12, depth=12, num_superpixels=256 (but VQ maps grid).
+
+model:
+  img_size: 1024
+  embed_dims: 768
+  num_heads: 12
+  depth: 12
+  drop_path_rate: 0.0
+  init_values: 0.0
+  final_norm: true
+  out_indices: [-1]
+  with_cls_token: false
+  output_cls_token: false
+  register_tokens: 0
+  scatter_output: false
+  codebook_size: 1024
+  downsample_factor: 16
+  latent_dim: null
+  num_res_blocks: 2
+  use_ema: false
+  beta: 0.25
+  norm_layer: rmsnorm
+  act_layer: swiglu
+  use_attnres: false
+  attnres_mode: block
+  attnres_gate_type: bias
+  attnres_num_blocks: 8
+  attnres_recency_bias_init: 10.0

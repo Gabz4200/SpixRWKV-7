@@ -24,6 +24,7 @@ import yaml
 from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
+from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision_rwkv7
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -272,12 +273,24 @@ def _build_rwkv(
             init_values=config.get("init_values", 1e-5),
             final_norm=config.get("final_norm", True),
             out_indices=config.get("out_indices", [-1]),
-            scatter_output=config.get("scatter_output", True),
+            with_cls_token=config.get("with_cls_token", False),
+            output_cls_token=config.get("output_cls_token", False),
+            register_tokens=config.get("register_tokens", 0),
+            scatter_output=config.get("scatter_output", False),
             drop_path_rate=config.get("drop_path_rate", 0.0),
             codebook_size=config.get("codebook_size", 1024),
             downsample_factor=config.get("downsample_factor", 16),
-            norm_layer=config.get("norm_layer", "layernorm"),
-            act_layer=config.get("act_layer", "relu2"),
+            latent_dim=config.get("latent_dim", None),
+            num_res_blocks=config.get("num_res_blocks", 2),
+            use_ema=config.get("use_ema", False),
+            beta=config.get("beta", 0.25),
+            norm_layer=config.get("norm_layer", "rmsnorm"),
+            act_layer=config.get("act_layer", "swiglu"),
+            use_attnres=config.get("use_attnres", False),
+            attnres_mode=config.get("attnres_mode", "block"),
+            attnres_gate_type=config.get("attnres_gate_type", "bias"),
+            attnres_num_blocks=config.get("attnres_num_blocks", 8),
+            attnres_recency_bias_init=config.get("attnres_recency_bias_init", 10.0),
         )
     if model_type == "conv":
         return create_conv_vision_rwkv7(
@@ -301,6 +314,44 @@ def _build_rwkv(
             conv_stem_strides=tuple(config.get("conv_stem_strides", [1, 2, 2])),
             conv_stem_norm=config.get("conv_stem_norm", "batchnorm2d"),
             conv_post_norm=config.get("conv_post_norm", "layernorm"),
+            with_cls_token=config.get("with_cls_token", False),
+            output_cls_token=config.get("output_cls_token", False),
+            register_tokens=config.get("register_tokens", 0),
+            spixel_size=config.get("spixel_size", None),
+            use_attnres=config.get("use_attnres", False),
+            attnres_mode=config.get("attnres_mode", "block"),
+            attnres_gate_type=config.get("attnres_gate_type", "bias"),
+            attnres_num_blocks=config.get("attnres_num_blocks", 8),
+            attnres_recency_bias_init=config.get("attnres_recency_bias_init", 10.0),
+            use_cpp=config.get("use_cpp", False),
+        )
+    if model_type == "gnn":
+        eff_df = downsample_factor if downsample_factor is not None else config.get("downsample_factor", 16)
+        return create_gnn_vision_rwkv7(
+            img_size=img_size,
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            depth=depth,
+            init_values=config.get("init_values", 1e-5),
+            final_norm=config.get("final_norm", True),
+            out_indices=config.get("out_indices", [-1]),
+            num_superpixels=num_superpixels,
+            scatter_output=config.get("scatter_output", True),
+            diff_slic_iters=config.get("diff_slic_iters", 5),
+            compactness=config.get("compactness", 0.5),
+            norm_layer=config.get("norm_layer", "layernorm"),
+            act_layer=config.get("act_layer", "relu2"),
+            spixel_backend=config.get("spixel_backend", "diff_slic"),
+            downsample_factor=float(eff_df),
+            gnn_conv=config.get("gnn_conv", "gatv2"),
+            gnn_heads=config.get("gnn_heads", 4),
+            gnn_aggr=config.get("gnn_aggr", "mean"),
+            with_cls_token=config.get("with_cls_token", False),
+            output_cls_token=config.get("output_cls_token", False),
+            register_tokens=config.get("register_tokens", 0),
+            spixel_size=config.get("spixel_size", None),
+            use_cpp=config.get("use_cpp", False),
+            use_jit=config.get("use_jit", False),
         )
     if downsample_factor is None:
         downsample_factor = config.get("downsample_factor", 16)
@@ -319,6 +370,16 @@ def _build_rwkv(
             compactness=config.get("compactness", 0.5),
             norm_layer=config.get("norm_layer", "layernorm"),
             act_layer=config.get("act_layer", "relu2"),
+            with_cls_token=config.get("with_cls_token", False),
+            output_cls_token=config.get("output_cls_token", False),
+            register_tokens=config.get("register_tokens", 0),
+            spixel_size=config.get("spixel_size", None),
+            use_attnres=config.get("use_attnres", False),
+            attnres_mode=config.get("attnres_mode", "block"),
+            attnres_gate_type=config.get("attnres_gate_type", "bias"),
+            attnres_num_blocks=config.get("attnres_num_blocks", 8),
+            attnres_recency_bias_init=config.get("attnres_recency_bias_init", 10.0),
+            use_jit=config.get("use_jit", False),
             use_parallel=use_parallel,
         )
         if downsample_factor is not None:
@@ -406,7 +467,7 @@ def run_size_comparison(
     variant_results: List[Dict[str, Any]] = []
     variants = [model_type]
     if compare_variants:
-        variants = [v for v in compare_variants if v in {"spix", "conv", "vq"}]
+        variants = [v for v in compare_variants if v in {"spix", "conv", "vq", "gnn"}]
         if not variants:
             variants = [model_type]
 
@@ -415,12 +476,12 @@ def run_size_comparison(
 
     for size in sizes:
         for factor in downsample_factors:
-            run_variants = [v for v in variants if v == "spix" or factor == downsample_factors[0]]
+            run_variants = [v for v in variants if v in ("spix", "gnn") or factor == downsample_factors[0]]
             if not run_variants:
                 continue
             print(f"\n--- {size.upper()} (factor={factor}) ---")
             for variant in run_variants:
-                config_path = config_dir / (f"conv_{size}.yaml" if variant == "conv" else f"{size}.yaml")
+                config_path = config_dir / (f"conv_{size}.yaml" if variant == "conv" else f"gnn_{size}.yaml" if variant == "gnn" else f"vq_{size}.yaml" if variant == "vq" else f"{size}.yaml")
                 config = load_config(str(config_path))
                 entry = _benchmark_variant(
                     variant, size, config, img_size, device, warmup_runs, timed_runs,
@@ -451,13 +512,12 @@ def run_resolution_sweep(
     print(f"{'=' * 70}")
 
     config_dir = Path("configs/model")
-    config_path = config_dir / f"{size}.yaml" if model_type != "conv" else config_dir / f"conv_{size}.yaml"
+    config_path = config_dir / f"gnn_{size}.yaml" if model_type == "gnn" else config_dir / f"conv_{size}.yaml" if model_type == "conv" else config_dir / f"vq_{size}.yaml" if model_type == "vq" else config_dir / f"{size}.yaml"
     config = load_config(str(config_path))
 
     embed_dims = config["embed_dims"]
     depth = config["depth"]
     num_heads = config["num_heads"]
-    num_superpixels = config["num_superpixels"]
 
     print(f"Model config: embed_dims={embed_dims}, depth={depth}, num_heads={num_heads}")
     print(f"Testing image sizes: {img_sizes}")
@@ -467,72 +527,12 @@ def run_resolution_sweep(
     for img_size in img_sizes:
         print(f"\n  --- Image size: {img_size}x{img_size} ---")
 
-        # Create Vision RWKV-7 model (optimized if available)
-        if model_type == "vq":
-            rwkv_model = create_vq_rwkv7(
-                img_size=img_size,
-                embed_dims=embed_dims,
-                num_heads=num_heads,
-                depth=depth,
-                init_values=config.get("init_values", 1e-5),
-                final_norm=config.get("final_norm", True),
-                out_indices=config.get("out_indices", [-1]),
-                scatter_output=config.get("scatter_output", True),
-                drop_path_rate=config.get("drop_path_rate", 0.0),
-                codebook_size=config.get("codebook_size", 1024),
-                downsample_factor=config.get("downsample_factor", 16),
-                norm_layer=config.get("norm_layer", "layernorm"),
-                act_layer=config.get("act_layer", "relu2"),
-            )
-        elif model_type == "conv":
-            rwkv_model = create_conv_vision_rwkv7(
-                img_size=img_size,
-                embed_dims=embed_dims,
-                num_heads=num_heads,
-                depth=depth,
-                init_values=config.get("init_values", 1e-5),
-                final_norm=config.get("final_norm", True),
-                out_indices=config.get("out_indices", [-1]),
-                num_superpixels=num_superpixels,
-                scatter_output=config.get("scatter_output", True),
-                diff_slic_iters=config.get("diff_slic_iters", 5),
-                compactness=config.get("compactness", 0.5),
-                norm_layer=config.get("norm_layer", "layernorm"),
-                act_layer=config.get("act_layer", "relu2"),
-                spixel_backend=config.get("spixel_backend", "diff_slic"),
-                use_jit=config.get("use_jit", False),
-                conv_stem_channels=tuple(config.get("conv_stem_channels", [32, 64, 128])),
-                conv_stem_kernel_sizes=tuple(config.get("conv_stem_kernel_sizes", [3, 5, 5])),
-                conv_stem_strides=tuple(config.get("conv_stem_strides", [1, 2, 2])),
-                conv_stem_norm=config.get("conv_stem_norm", "batchnorm2d"),
-                conv_post_norm=config.get("conv_post_norm", "layernorm"),
-            )
-        else:
-            rwkv_model = _create_model(
-                img_size=img_size,
-                embed_dims=embed_dims,
-                num_heads=num_heads,
-                depth=depth,
-                init_values=config.get("init_values", 1e-5),
-                final_norm=config.get("final_norm", True),
-                out_indices=config.get("out_indices", [-1]),
-                num_superpixels=num_superpixels,
-                scatter_output=config.get("scatter_output", True),
-                diff_slic_iters=config.get("diff_slic_iters", 5),
-                compactness=config.get("compactness", 0.5),
-                norm_layer=config.get("norm_layer", "layernorm"),
-                act_layer=config.get("act_layer", "relu2"),
-                use_parallel=use_parallel,
-            )
-        if hard_mode and model_type not in ("vq", "conv"):
-            tokenizer = getattr(rwkv_model, "tokenizer", None)
-            if tokenizer is not None:
-                setattr(tokenizer, "mode", "hard")
-                diff_slic = getattr(tokenizer, "diff_slic", None)
-                if diff_slic is not None:
-                    setattr(diff_slic, "hard_mode", True)
-        if use_parallel and model_type not in ("vq", "conv"):
-            pass  # already passed to model
+        # Build through the fully-wired builder (single source of truth for
+        # variant kwargs + hard_mode/parallel handling).
+        rwkv_model = _build_rwkv(
+            model_type, size, config, img_size,
+            use_parallel=use_parallel, hard_mode=hard_mode,
+        )
 
 
         rwkv_params = count_parameters(rwkv_model)
@@ -652,7 +652,7 @@ def main():
     )
     parser.add_argument(
         "--model-type",
-        choices=["spix", "vq", "conv"],
+        choices=["spix", "vq", "conv", "gnn"],
         default="spix",
         help="Backbone type (default: spix)",
     )

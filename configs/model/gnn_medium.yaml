@@ -1,0 +1,32 @@
+# GNN (Graph Neural Network) ablation — medium
+# Mirrors medium.yaml but replaces the RWKV-7 recurrence with a stack of
+# PyTorch-Geometric message-passing layers over the superpixel KNN graph.
+# img_size=-1 => native-resolution input; the GNN processes only 196 superpixel
+# tokens, so backbone FLOPS are img_size-independent. Requires native height
+# >= ~256 so the segmentation grid (native/df) fits 196 superpixels. df=16.
+model:
+  img_size: -1
+  embed_dims: 512
+  num_heads: 8
+  depth: 12
+  drop_path_rate: 0.2
+  init_values: 1.0e-5
+  final_norm: true
+  out_indices: [-1]
+  with_cls_token: false
+  output_cls_token: false
+  register_tokens: 0
+  scatter_output: true
+  num_superpixels: 196
+  spixel_size: null
+  diff_slic_iters: 5
+  compactness: 0.5
+  spixel_backend: diff_slic
+  norm_layer: rmsnorm
+  act_layer: swiglu
+  use_cpp: false
+  downsample_factor: 16
+  gnn_conv: gatv2
+  gnn_heads: 4
+  gnn_aggr: mean
+  use_jit: false

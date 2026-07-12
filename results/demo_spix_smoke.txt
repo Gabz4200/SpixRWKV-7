@@ -1,90 +1,90 @@
 
 === Testing seed 3407 ===
-Input:  (1, 6, 512, 424)
+Input:  (1, 6, 64, 53)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 64, 53)
 
-Total params: 9.15M
+Total params: 1.60M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 42 ===
-Input:  (1, 6, 512, 424)
+Input:  (1, 6, 64, 53)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 64, 53)
 
-Total params: 9.15M
+Total params: 1.60M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 123 ===
-Input:  (1, 6, 512, 424)
+Input:  (1, 6, 64, 53)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 64, 53)
 
-Total params: 9.15M
+Total params: 1.60M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 456 ===
-Input:  (1, 6, 512, 424)
+Input:  (1, 6, 64, 53)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 64, 53)
 
-Total params: 9.15M
+Total params: 1.60M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 789 ===
-Input:  (1, 6, 512, 424)
+Input:  (1, 6, 64, 53)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 64, 53)
 
-Total params: 9.15M
+Total params: 1.60M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 1000 ===
-Input:  (1, 6, 512, 424)
+Input:  (1, 6, 64, 53)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 64, 53)
 
-Total params: 9.15M
+Total params: 1.60M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 2000 ===
-Input:  (1, 6, 512, 424)
+Input:  (1, 6, 64, 53)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 64, 53)
 
-Total params: 9.15M
+Total params: 1.60M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 3000 ===
-Input:  (1, 6, 512, 424)
+Input:  (1, 6, 64, 53)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 64, 53)
 
-Total params: 9.15M
+Total params: 1.60M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 4000 ===
-Input:  (1, 6, 512, 424)
+Input:  (1, 6, 64, 53)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 64, 53)
 
-Total params: 9.15M
+Total params: 1.60M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 5000 ===
-Input:  (1, 6, 512, 424)
+Input:  (1, 6, 64, 53)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 64, 53)
 
-Total params: 9.15M
+Total params: 1.60M
 All outputs finite: True
 Deterministic: True

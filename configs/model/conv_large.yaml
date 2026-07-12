@@ -1,8 +1,9 @@
-# Conv-Stem Large model config (~101M params, depth=12, 196 superpixels)
-# Conv stem: 6→96→192→384, 4× reduction (strides 1,2,2)
-# Competitive with ViT-L/16
+# Conv-Stem Large model config (~101M params, depth=12, 256 superpixels)
+# Conv stem: 6→96→192→384, 4x reduction (strides 1,2,2).
+# Competitive with ViT-L/16. img_size=-1 => native-resolution input; the
+# backbone processes only 256 superpixel tokens. Requires native height >= ~256.
 model:
-  img_size: 224
+  img_size: -1
   embed_dims: 768
   num_heads: 12
   depth: 12
@@ -10,14 +11,24 @@ model:
   init_values: 1.0e-5
   final_norm: true
   out_indices: [-1]
-  num_superpixels: 196
+  with_cls_token: false
+  output_cls_token: false
+  register_tokens: 0
   scatter_output: true
+  num_superpixels: 256
+  spixel_size: null
   diff_slic_iters: 5
   compactness: 0.5
   norm_layer: rmsnorm
   act_layer: swiglu
-  codebook_size: 1024
-  downsample_factor: 16
+  spixel_backend: diff_slic
+  use_attnres: false
+  attnres_mode: block
+  attnres_gate_type: bias
+  attnres_num_blocks: 8
+  attnres_recency_bias_init: 10.0
+  use_cpp: false
+  use_jit: false
   conv_stem_channels: [96, 192, 384]
   conv_stem_kernel_sizes: [3, 5, 5]
   conv_stem_strides: [1, 2, 2]

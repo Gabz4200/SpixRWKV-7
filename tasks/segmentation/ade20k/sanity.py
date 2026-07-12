@@ -35,46 +35,12 @@ from datasets import load_dataset
 from torch.utils.data import DataLoader, IterableDataset
 
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
-from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
-from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
-from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
+from tasks.config_loader import load_model_config, build_backbone
 
 # ---------------------------------------------------------------------------
 # ADE20K constants
 # ---------------------------------------------------------------------------
 _IGNORE_INDEX = 255  # void/unlabeled — used for unknown classes too
-
-
-# ---------------------------------------------------------------------------
-# Scale presets — embed_dims must be multiple of HEAD_SIZE=64
-# ---------------------------------------------------------------------------
-_SCALES = {
-    "tiny": {
-        "embed_dims": 128, "num_heads": 2, "depth": 4,
-        "num_superpixels": 36, "img_size": 64,
-    },
-    "small": {
-        "embed_dims": 384, "num_heads": 6, "depth": 8,
-        "num_superpixels": 64, "img_size": 112,
-    },
-    "medium": {
-        "embed_dims": 576, "num_heads": 9, "depth": 12,
-        "num_superpixels": 128, "img_size": 112,
-    },
-    "100m": {
-        "embed_dims": 768, "num_heads": 12, "depth": 12,
-        "num_superpixels": 196, "img_size": 224,
-    },
-}
-
-
-def resolve_scale(cfg: dict) -> dict:
-    """Fill defaults for CLI-overridden scale config."""
-    base = _SCALES[cfg.get("scale", "tiny")].copy()
-    for k in ("embed_dims", "num_heads", "depth", "num_superpixels", "img_size"):
-        if k in cfg and cfg[k] is not None:
-            base[k] = cfg[k]
-    return base
 
 
 # =====================================================================
@@ -208,61 +174,10 @@ class ADE20KSegModel(nn.Module):
     def __init__(self, config: dict, num_classes: int, model_type: str = "spix"):
         super().__init__()
         self.model_type = model_type
-        if model_type == "vq":
-            self.backbone = create_vq_rwkv7(
-                img_size=config["img_size"],
-                embed_dims=config["embed_dims"],
-                num_heads=config["num_heads"],
-                depth=config["depth"],
-                drop_path_rate=config.get("drop_path_rate", 0.0),
-                scatter_output=True,
-                init_values=1e-5,
-                norm_layer="rmsnorm",
-                act_layer="swiglu",
-                codebook_size=config.get("codebook_size", 1024),
-                downsample_factor=config.get("downsample_factor", 16),
-            )
-        elif model_type == "conv":
-            self.backbone = create_conv_vision_rwkv7(
-                img_size=config["img_size"],
-                embed_dims=config["embed_dims"],
-                num_heads=config["num_heads"],
-                depth=config["depth"],
-                init_values=1e-5,
-                norm_layer="rmsnorm",
-                act_layer="swiglu",
-                out_indices=(config.get("out_indices", -1),),
-                num_superpixels=config["num_superpixels"],
-                scatter_output=config.get("scatter_output", True),
-                diff_slic_iters=config.get("diff_slic_iters", 1),
-                compactness=config.get("compactness", 0.5),
-                spixel_backend=config.get("spixel_backend", "diff_slic"),
-                use_attnres=config.get("use_attnres", True),
-                use_jit=config.get("use_jit", False),
-                conv_stem_channels=tuple(config.get("conv_stem_channels", [32, 64, 128])),
-                conv_stem_kernel_sizes=tuple(config.get("conv_stem_kernel_sizes", [3, 5, 5])),
-                conv_stem_strides=tuple(config.get("conv_stem_strides", [1, 2, 2])),
-                conv_stem_norm=config.get("conv_stem_norm", "batchnorm2d"),
-                conv_post_norm=config.get("conv_post_norm", "layernorm"),
-            )
-        else:
-            kwargs = {
-                "img_size": config["img_size"],
-                "embed_dims": config["embed_dims"],
-                "num_heads": config["num_heads"],
-                "depth": config["depth"],
-                "num_superpixels": config["num_superpixels"],
-                "drop_path_rate": config.get("drop_path_rate", 0.0),
-                "scatter_output": True,
-                "diff_slic_iters": config.get("diff_slic_iters", 1),
-                "compactness": config.get("compactness", 0.5),
-                "init_values": 1e-5,
-                "norm_layer": "rmsnorm",
-                "act_layer": "swiglu",
-            }
-            if config.get("downsample_factor") is not None:
-                kwargs["downsample_factor"] = config["downsample_factor"]
-            self.backbone = _create_model(**kwargs)
+        # Force scatter_output to True for dense prediction/segmentation task
+        config = config.copy()
+        config["scatter_output"] = True
+        self.backbone = build_backbone(model_type, config)
         self.seg_head = SegHead(config["embed_dims"], num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -380,7 +295,7 @@ def main() -> None:
     parser.add_argument("--shuffle-buffer", type=int, default=100)
     parser.add_argument("--target-accuracy", type=float, default=0.0,
                         help="Stop early when pixel accuracy >= this")
-    parser.add_argument("--model-type", choices=["spix", "vq", "conv"], default="spix",
+    parser.add_argument("--model-type", choices=["spix", "vq", "conv", "gnn"], default="spix",
                         help="Backbone type (default: spix)")
     parser.add_argument("--codebook-size", type=int, default=1024,
                         help="VQ codebook size")
@@ -404,12 +319,25 @@ def main() -> None:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    cfg = resolve_scale({
-        "scale": args.scale, "embed_dims": args.embed_dims,
-        "num_heads": args.num_heads, "depth": args.depth,
-        "num_superpixels": args.num_superpixels, "img_size": args.img_size,
-        "drop_path_rate": args.drop_path_rate, "diff_slic_iters": args.diff_slic_iters,
-    })
+    cfg = load_model_config(args.model_type, args.scale)
+    if args.embed_dims is not None:
+        cfg["embed_dims"] = args.embed_dims
+    if args.num_heads is not None:
+        cfg["num_heads"] = args.num_heads
+    if args.depth is not None:
+        cfg["depth"] = args.depth
+    if args.num_superpixels is not None:
+        cfg["num_superpixels"] = args.num_superpixels
+    if args.img_size is not None:
+        cfg["img_size"] = args.img_size
+    if args.drop_path_rate is not None:
+        cfg["drop_path_rate"] = args.drop_path_rate
+    if args.diff_slic_iters is not None:
+        cfg["diff_slic_iters"] = args.diff_slic_iters
+    if args.downsample_factor is not None:
+        cfg["downsample_factor"] = args.downsample_factor
+    if args.codebook_size is not None:
+        cfg["codebook_size"] = args.codebook_size
 
     device = torch.device("cpu")
     print("=" * 72)
@@ -418,7 +346,7 @@ def main() -> None:
     print(f"  Model scale:     {args.scale}")
     print(f"  embed_dims:      {cfg['embed_dims']}  (num_heads={cfg['num_heads']})")
     print(f"  depth:           {cfg['depth']}")
-    print(f"  num_superpixels: {cfg['num_superpixels']}")
+    print(f"  num_superpixels: {cfg.get('num_superpixels', 'N/A')}")
     print(f"  img_size:        {cfg['img_size']}")
     print(f"  num_train:       {args.num_train_images}")
     print(f"  num_val:         {args.num_val_images}")
@@ -442,8 +370,29 @@ def main() -> None:
     print(f"  Unknown classes in val set: {unknown_count} ")
     print()
 
-    def make_model(variant: str) -> nn.Module:
-        return ADE20KSegModel(cfg, NUM_CLASSES, model_type=variant).to(device)
+    def make_model(variant: str, df: Optional[float] = None) -> nn.Module:
+        cfg_variant = load_model_config(variant, args.scale)
+        if args.embed_dims is not None:
+            cfg_variant["embed_dims"] = args.embed_dims
+        if args.num_heads is not None:
+            cfg_variant["num_heads"] = args.num_heads
+        if args.depth is not None:
+            cfg_variant["depth"] = args.depth
+        if args.num_superpixels is not None:
+            cfg_variant["num_superpixels"] = args.num_superpixels
+        if args.img_size is not None:
+            cfg_variant["img_size"] = args.img_size
+        if args.drop_path_rate is not None:
+            cfg_variant["drop_path_rate"] = args.drop_path_rate
+        if args.diff_slic_iters is not None:
+            cfg_variant["diff_slic_iters"] = args.diff_slic_iters
+        if df is not None:
+            cfg_variant["downsample_factor"] = df
+        elif args.downsample_factor is not None:
+            cfg_variant["downsample_factor"] = args.downsample_factor
+        if args.codebook_size is not None:
+            cfg_variant["codebook_size"] = args.codebook_size
+        return ADE20KSegModel(cfg_variant, NUM_CLASSES, model_type=variant).to(device)
 
     def train_variant(variant: str, df: Optional[float] = None) -> dict:
         print("\n" + "-" * 72)
@@ -472,12 +421,12 @@ def main() -> None:
             pin_memory=True,
         )
 
-        model = make_model(variant)
+        model = make_model(variant, df)
         total_params = sum(p.numel() for p in model.parameters())
         trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"  Model params: {total_params:,} (trainable: {trainable:,})")
         head_params = sum(p.numel() for p in model.seg_head.parameters())
-        print(f"  Seg head:      {head_params:,}  ({NUM_CLASSES} classes x {cfg['embed_dims']})")
+        print(f"  Seg head:      {head_params:,}  ({NUM_CLASSES} classes x {model.backbone.embed_dims})")
         print()
 
         optimizer = torch.optim.AdamW(
@@ -582,14 +531,13 @@ def main() -> None:
     variants = [args.model_type]
     results = []
     if args.compare_variants:
-        candidates = [v for v in args.compare_variants if v in {"spix", "conv", "vq"}]
+        candidates = [v for v in args.compare_variants if v in {"spix", "conv", "vq", "gnn"}]
         if candidates:
             variants = candidates
 
     for variant in variants:
-        dfactors = args.downsample_factors if (args.downsample_factors is not None and variant == "spix") else [None]
+        dfactors = args.downsample_factors if (args.downsample_factors is not None and variant in ("spix", "gnn")) else [None]
         for df in dfactors:
-            cfg["downsample_factor"] = df
             results.append(train_variant(variant, df))
 
     if len(results) > 1:

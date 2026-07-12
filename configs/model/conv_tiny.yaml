@@ -1,8 +1,10 @@
 # Conv-Stem Tiny model config (~1.3M params, depth=2, 36 superpixels)
-# Conv stem: 6→32→64→128, 4× reduction (strides 1,2,2)
-# Fastest conv config for debugging and convergence testing
+# Conv stem: 6→32→64→128, 4x reduction (strides 1,2,2).
+# Fastest conv config for debugging and convergence testing. 512px input,
+# the backbone processes 36 superpixel tokens. Conv uses strided conv
+# reduction (conv_stem_strides), NOT downsample_factor (no df key).
 model:
-  img_size: 64
+  img_size: 512
   embed_dims: 128
   num_heads: 2
   depth: 2
@@ -10,14 +12,24 @@ model:
   init_values: 1.0e-5
   final_norm: true
   out_indices: [-1]
-  num_superpixels: 36
+  with_cls_token: false
+  output_cls_token: false
+  register_tokens: 0
   scatter_output: true
+  num_superpixels: 36
+  spixel_size: null
   diff_slic_iters: 5
   compactness: 0.5
   norm_layer: rmsnorm
   act_layer: swiglu
-  codebook_size: 512
-  downsample_factor: 8
+  spixel_backend: diff_slic
+  use_attnres: false
+  attnres_mode: block
+  attnres_gate_type: bias
+  attnres_num_blocks: 8
+  attnres_recency_bias_init: 10.0
+  use_cpp: false
+  use_jit: false
   conv_stem_channels: [32, 64, 128]
   conv_stem_kernel_sizes: [3, 5, 5]
   conv_stem_strides: [1, 2, 2]
