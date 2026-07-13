@@ -413,10 +413,7 @@ def main() -> None:
         pin_memory=True,
     )
 
-    try:
-        train_len = len(train_ds)
-    except Exception:
-        train_len = args.max_train_samples or 25574
+    train_len = args.max_train_samples if args.max_train_samples is not None else len(train_ds)
     steps_per_epoch = math.ceil(train_len / args.batch_size)
     total_steps = steps_per_epoch * args.epochs
 
