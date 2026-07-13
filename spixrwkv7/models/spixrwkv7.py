@@ -887,15 +887,14 @@ class SuperpixelTokenizer(nn.Module):
             cache_dir = os.path.expanduser("~/.cache/spixrwkv7")
             check_path = os.path.join(cache_dir, "lnsnet_BSDS_checkpoint.pth")
             download_lnsnet_weights(check_path)
-            if os.path.exists(check_path):
-                try:
-                    state_dict = torch.load(check_path, map_location="cpu")
-                    self.lnsnet_model.load_state_dict(state_dict)
-                    print(f"Loaded LNSNet BSDS checkpoint from {check_path}.")
-                except Exception as e:
-                    print(f"WARNING: Failed to load LNSNet checkpoint: {e}. Running with randomly initialized weights.")
-            else:
-                print("WARNING: Checkpoint not found. Running with randomly initialized weights.")
+            if not os.path.exists(check_path):
+                raise FileNotFoundError(
+                    f"LNSNet checkpoint not found at {check_path}. "
+                    "Provide the weights or choose a different spixel_backend."
+                )
+            state_dict = torch.load(check_path, map_location="cpu")
+            self.lnsnet_model.load_state_dict(state_dict)
+            print(f"Loaded LNSNet BSDS checkpoint from {check_path}.")
         else:
             self.lnsnet_model = None
 

@@ -14,6 +14,10 @@ import torch.nn.functional as F
 # Filler value for masked positions in softmax (finite to avoid NaN when all positions are masked)
 FILLER = -1e9
 
+# Set once when the C++ diff_slic kernel is unavailable, so the PyTorch
+# fallback warns exactly once instead of on every property access.
+_cpp_fallback_warned = False
+
 
 def _masked_softmax(
     similarities: torch.Tensor,
@@ -273,8 +277,14 @@ class DiffSLIC(nn.Module):
             from spixrwkv7.kernels.rwkv7_kernel import _C
             return hasattr(_C, "diff_slic_update_clusters") and hasattr(_C, "diff_slic_assign_pixels")
         except (ImportError, AttributeError):
+            global _cpp_fallback_warned
+            if not _cpp_fallback_warned:
+                _cpp_fallback_warned = True
+                print(
+                    "WARNING: C++ diff_slic kernel unavailable; "
+                    "falling back to the PyTorch implementation."
+                )
             return False
-
     def forward(
         self, x: torch.Tensor, clst_feats: Optional[torch.Tensor] = None, n_spixels: Optional[int] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:

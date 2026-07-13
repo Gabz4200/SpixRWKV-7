@@ -28,10 +28,8 @@ def _jit_flags() -> list[str]:
 
 def _inductor_config():
     """Get torch._inductor.config, return None if unavailable."""
-    try:
-        return getattr(getattr(torch, "_inductor", None), "config", None)
-    except Exception:  # noqa: BLE001
-        return None
+    inductor = getattr(torch, "_inductor", None)
+    return getattr(inductor, "config", None) if inductor is not None else None
 
 
 def _pad_inductor_compile_args(extra_flags: list[str]) -> None:
