@@ -31,6 +31,7 @@ from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as 
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
 from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision
+from spixrwkv7.task_utils import compute_grad_norm
 
 # ---------------------------------------------------------------------------
 # Default hyper-parameters (tuned for single-batch overfit)
@@ -72,14 +73,6 @@ def synth_batch(
 
 def accuracy(logits: Tensor, targets: Tensor) -> float:
     return (logits.argmax(dim=1) == targets).float().mean().item() * 100.0
-
-
-def compute_grad_norm(model: nn.Module) -> float:
-    total = 0.0
-    for p in model.parameters():
-        if p.grad is not None:
-            total += p.grad.norm().item() ** 2
-    return math.sqrt(total)
 
 
 def main() -> None:

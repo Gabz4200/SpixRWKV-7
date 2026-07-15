@@ -35,6 +35,13 @@ from datasets import load_dataset
 from torch.utils.data import DataLoader, IterableDataset
 
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
+from spixrwkv7.task_utils import (
+    build_label_map,
+    compute_grad_norm,
+    discover_ade20k_classes,
+    pixel_accuracy,
+    pil_to_balanced,
+)
 from tasks.config_loader import load_model_config, build_backbone
 
 # ---------------------------------------------------------------------------
@@ -46,71 +53,6 @@ _IGNORE_INDEX = 255  # void/unlabeled — used for unknown classes too
 # =====================================================================
 # Discover class mapping from ADE20K raw indices -> compressed 0..C-1
 # =====================================================================
-
-
-def discover_ade20k_classes(
-    split: str = "train", max_samples: int = 128, shuffle_buffer: int = 100, seed: int = 42
-) -> dict[int, int]:
-    """Scan the first max_samples of a split and build raw_ndx -> compressed index."""
-    ds = load_dataset("1aurent/ADE20K", split=split, streaming=True)
-    ds = ds.shuffle(buffer_size=shuffle_buffer, seed=seed)
-    class_set: set[int] = set()
-    for i, sample in enumerate(ds):
-        if i >= max_samples:
-            break
-        for obj in sample["objects"]:
-            class_set.add(obj["name_ndx"])
-    sorted_classes = sorted(class_set)
-    return {raw: comp for comp, raw in enumerate(sorted_classes)}
-
-
-# =====================================================================
-# Build semantic label map using compressed class indices
-# =====================================================================
-
-
-def build_label_map(sample: dict, height: int, width: int, class_map: dict) -> torch.Tensor:
-    """Build label map: (H, W) long tensor with compressed indices or _IGNORE_INDEX."""
-    H, W = height, width
-    label = torch.full((H, W), _IGNORE_INDEX, dtype=torch.long)
-    for seg_pil, obj in zip(sample["segmentations"], sample["objects"]):
-        raw_ndx = obj["name_ndx"]
-        compressed = class_map.get(raw_ndx)
-        if compressed is None:
-            continue
-        seg_resized = seg_pil.resize((W, H), Image.Resampling.NEAREST)
-        mask_arr = np.array(seg_resized, dtype=np.int64)
-        if mask_arr.ndim == 3:
-            mask_arr = mask_arr[..., 0]
-        mask = torch.from_numpy(mask_arr > 0)
-        if mask.any():
-            label = label.clone()
-            label[mask] = compressed
-    return label
-
-
-# =====================================================================
-# Image preprocessing
-# =====================================================================
-
-
-def pil_to_balanced(pil_image: Image.Image, img_size: int) -> torch.Tensor:
-    """PIL RGB -> 6-channel balanced tensor for SpixRWKV-7 input.
-
-    Resizes so that height matches ``img_size`` (proportional width).
-    If ``img_size <= 0``, original resolution is preserved.
-    """
-    pil_image = pil_image.convert("RGB")
-    if img_size > 0:
-        orig_w, orig_h = pil_image.size
-        aspect = orig_w / orig_h
-        new_h = img_size
-        new_w = int(round(new_h * aspect))
-        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
-    arr = np.array(pil_image, dtype=np.float32) / 255.0
-    img_tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
-    balanced = prepare_balanced_superpixel_features(img_tensor, alpha=None, chroma_scale=2.5)
-    return balanced.squeeze(0)
 
 
 # =====================================================================
@@ -190,25 +132,6 @@ class ADE20KSegModel(nn.Module):
 # =====================================================================
 # Metrics
 # =====================================================================
-
-
-def compute_grad_norm(model: nn.Module) -> float:
-    total = 0.0
-    for p in model.parameters():
-        if p.grad is not None:
-            total += p.grad.norm().item() ** 2
-    return math.sqrt(total)
-
-
-def pixel_accuracy(logits: torch.Tensor, targets: torch.Tensor) -> float:
-    """Percent of non-ignore pixels correctly classified."""
-    preds = logits.argmax(dim=1)
-    mask = targets != _IGNORE_INDEX
-    if not mask.any():
-        return 0.0
-    correct = (preds[mask] == targets[mask]).float().sum()
-    total = mask.float().sum()
-    return (correct / total).item()
 
 
 # =====================================================================

@@ -28,6 +28,13 @@ from torch.utils.data import DataLoader, IterableDataset
 
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
 from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
+from spixrwkv7.task_utils import (
+    compute_mae,
+    compute_pearson_r,
+    compute_r2,
+    compute_rmse,
+    pil_to_balanced,
+)
 
 # ---------------------------------------------------------------------------
 # Default checkpoint path
@@ -36,34 +43,6 @@ _DEFAULT_CKPT = (
     Path(__file__).resolve().parent.parent.parent.parent
     / "checkpoints" / "humordb" / "best_val_loss.pt"
 )
-
-
-# =====================================================================
-# Image preprocessing (same as training)
-# =====================================================================
-
-
-def pil_to_balanced(pil_image: Image.Image, img_size: int) -> torch.Tensor:
-    """Convert PIL RGB to 6-channel balanced tensor for SpixRWKV-7 input.
-
-    Resizes so that height matches ``img_size`` (proportional width).
-    If ``img_size <= 0``, original resolution is preserved.
-    """
-    pil_image = pil_image.convert("RGB")
-    if img_size > 0:
-        orig_w, orig_h = pil_image.size
-        aspect = orig_w / orig_h
-        new_h = img_size
-        new_w = int(round(new_h * aspect))
-        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
-    arr = np.array(pil_image, dtype=np.float32) / 255.0
-    img_tensor = (
-        torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
-    )
-    balanced = prepare_balanced_superpixel_features(
-        img_tensor, alpha=None, chroma_scale=2.5
-    )
-    return balanced.squeeze(0)
 
 
 # =====================================================================
@@ -133,32 +112,6 @@ class HumorRegressor(nn.Module):
 # =====================================================================
 # Metrics
 # =====================================================================
-
-
-def compute_rmse(preds: torch.Tensor, targets: torch.Tensor) -> float:
-    return math.sqrt(F.mse_loss(preds, targets).item())
-
-
-def compute_mae(preds: torch.Tensor, targets: torch.Tensor) -> float:
-    return F.l1_loss(preds, targets).item()
-
-
-def compute_r2(preds: torch.Tensor, targets: torch.Tensor) -> float:
-    mse = F.mse_loss(preds, targets)
-    var = targets.var(unbiased=False)
-    return (1.0 - mse / (var + 1e-8)).item()
-
-
-def compute_pearson_r(
-    preds: torch.Tensor, targets: torch.Tensor
-) -> float:
-    preds_centered = preds - preds.mean()
-    targets_centered = targets - targets.mean()
-    num = (preds_centered * targets_centered).sum()
-    den = torch.sqrt(
-        (preds_centered**2).sum() * (targets_centered**2).sum()
-    )
-    return (num / (den + 1e-8)).item()
 
 
 # =====================================================================

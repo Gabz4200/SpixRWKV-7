@@ -33,6 +33,16 @@ from datasets import load_dataset
 from torch.utils.data import DataLoader, Dataset
 
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
+from spixrwkv7.task_utils import (
+    compute_grad_norm,
+    compute_mae,
+    compute_pearson_r,
+    compute_r2,
+    compute_rmse,
+    pil_to_balanced,
+    save_checkpoint as _save_checkpoint,
+    load_checkpoint as _load_checkpoint,
+)
 from tasks.config_loader import load_model_config, build_backbone
 
 # ---------------------------------------------------------------------------
@@ -48,40 +58,6 @@ _DATASET_SIZES = {
     "validation": 703,
     "test": 706,
 }
-
-
-# =====================================================================
-# Image preprocessing
-# =====================================================================
-
-
-def pil_to_balanced(
-    pil_image: Image.Image, img_size: int
-) -> torch.Tensor:
-    """Convert PIL RGB to 6-channel balanced tensor for SpixRWKV-7 input.
-
-    Resizes so that height matches ``img_size`` (proportional width).
-    If ``img_size <= 0``, original resolution is preserved.
-
-    Pipeline: RGB -> OkLAB -> Fixed Balancing (2*L-1, chroma_scale*a/b)
-              -> alpha -> xy coords.
-    """
-    pil_image = pil_image.convert("RGB")
-    if img_size > 0:
-        orig_w, orig_h = pil_image.size
-        aspect = orig_w / orig_h
-        new_h = img_size
-        new_w = int(round(new_h * aspect))
-        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
-    # (1, 3, H, W) float32 [0, 1]
-    arr = np.array(pil_image, dtype=np.float32) / 255.0
-    img_tensor = (
-        torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
-    )  # (1, 3, H, W)
-    balanced = prepare_balanced_superpixel_features(
-        img_tensor, alpha=None, chroma_scale=2.5
-    )
-    return balanced.squeeze(0)  # (6, H, W)
 
 
 # =====================================================================
@@ -246,75 +222,6 @@ class HumorRegressor(nn.Module):
 # =====================================================================
 # Metrics
 # =====================================================================
-
-
-def compute_rmse(preds: torch.Tensor, targets: torch.Tensor) -> float:
-    return math.sqrt(F.mse_loss(preds, targets).item())
-
-
-def compute_mae(preds: torch.Tensor, targets: torch.Tensor) -> float:
-    return F.l1_loss(preds, targets).item()
-
-
-def compute_r2(preds: torch.Tensor, targets: torch.Tensor) -> float:
-    mse = F.mse_loss(preds, targets)
-    var = targets.var(unbiased=False)
-    return (1.0 - mse / (var + 1e-8)).item()
-
-
-def compute_pearson_r(
-    preds: torch.Tensor, targets: torch.Tensor
-) -> float:
-    """Pearson correlation coefficient."""
-    preds_centered = preds - preds.mean()
-    targets_centered = targets - targets.mean()
-    num = (preds_centered * targets_centered).sum()
-    den = torch.sqrt((preds_centered**2).sum() * (targets_centered**2).sum())
-    return (num / (den + 1e-8)).item()
-
-
-def compute_grad_norm(model: nn.Module) -> float:
-    total = 0.0
-    for p in model.parameters():
-        if p.grad is not None:
-            total += p.grad.norm().item() ** 2
-    return math.sqrt(total)
-
-
-# =====================================================================
-# Checkpointing
-# =====================================================================
-
-
-def save_checkpoint(
-    path: Path,
-    model: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    epoch: int,
-    train_metrics: dict,
-    val_metrics: dict,
-    args: argparse.Namespace,
-) -> None:
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "train_metrics": train_metrics,
-            "val_metrics": val_metrics,
-            "args": vars(args),
-        },
-        path,
-    )
-
-
-def load_checkpoint(
-    path: Path, model: nn.Module, device: torch.device
-) -> dict:
-    """Load checkpoint and return metadata dict."""
-    state = torch.load(path, map_location=device, weights_only=True)
-    model.load_state_dict(state["model_state_dict"])
-    return state
 
 
 # =====================================================================

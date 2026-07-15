@@ -32,6 +32,16 @@ from datasets import load_dataset
 from torch.utils.data import DataLoader, IterableDataset
 
 from spixrwkv7.data.transforms import prepare_balanced_superpixel_features
+from spixrwkv7.task_utils import (
+    build_label_map,
+    compute_grad_norm,
+    discover_ade20k_classes,
+    load_checkpoint as _load_checkpoint,
+    mean_iou,
+    pixel_accuracy,
+    pil_to_balanced,
+    save_checkpoint as _save_checkpoint,
+)
 from tasks.config_loader import load_model_config, build_backbone
 
 # ---------------------------------------------------------------------------
@@ -44,77 +54,6 @@ _CHECKPOINT_DIR = Path(__file__).resolve().parent.parent.parent.parent / "checkp
 # =====================================================================
 # Discover class mapping
 # =====================================================================
-
-
-def discover_ade20k_classes(
-    split: str = "train",
-    max_samples: int = 500,
-    shuffle_buffer: int = 100,
-    seed: int = 42,
-) -> dict[int, int]:
-    """Scan dataset split and build raw_ndx -> compressed index dict."""
-    ds = load_dataset("1aurent/ADE20K", split=split, streaming=True)
-    if max_samples:
-        ds = ds.take(max_samples)
-    if shuffle_buffer > 0:
-        ds = ds.shuffle(buffer_size=shuffle_buffer, seed=seed)
-
-    class_set: set[int] = set()
-    for sample in ds:
-        for obj in sample["objects"]:
-            class_set.add(obj["name_ndx"])
-    sorted_classes = sorted(class_set)
-    return {raw: comp for comp, raw in enumerate(sorted_classes)}
-
-
-# =====================================================================
-# Build semantic label map
-# =====================================================================
-
-
-def build_label_map(sample: dict, height: int, width: int, class_map: dict) -> torch.Tensor:
-    """(H, W) long tensor with compressed class indices or _IGNORE_INDEX."""
-    H, W = height, width
-    label = torch.full((H, W), _IGNORE_INDEX, dtype=torch.long)
-    for seg_pil, obj in zip(sample["segmentations"], sample["objects"]):
-        compressed = class_map.get(obj["name_ndx"])
-        if compressed is None:
-            continue
-        seg_resized = seg_pil.resize((W, H), Image.Resampling.NEAREST)
-        mask_arr = np.array(seg_resized, dtype=np.int64)
-        if mask_arr.ndim == 3:
-            mask_arr = mask_arr[..., 0]
-        mask = torch.from_numpy(mask_arr > 0)
-        if mask.any():
-            label = label.clone()
-            label[mask] = compressed
-    return label
-
-
-# =====================================================================
-# Image preprocessing
-# =====================================================================
-
-
-def pil_to_balanced(pil_image: Image.Image, img_size: int) -> torch.Tensor:
-    """PIL RGB -> 6-channel balanced tensor for SpixRWKV-7 input.
-
-    Resizes so that height matches ``img_size`` (proportional width).
-    If ``img_size <= 0``, original resolution is preserved.
-    """
-    pil_image = pil_image.convert("RGB")
-    if img_size > 0:
-        orig_w, orig_h = pil_image.size
-        aspect = orig_w / orig_h
-        new_h = img_size
-        new_w = int(round(new_h * aspect))
-        pil_image = pil_image.resize((new_w, new_h), Image.Resampling.BILINEAR)
-    arr = np.array(pil_image, dtype=np.float32) / 255.0
-    img_tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
-    balanced = prepare_balanced_superpixel_features(
-        img_tensor, alpha=None, chroma_scale=2.5
-    )
-    return balanced.squeeze(0)
 
 
 # =====================================================================
@@ -221,37 +160,6 @@ class ADE20KSegModel(nn.Module):
 # =====================================================================
 # Metrics
 # =====================================================================
-
-
-def compute_grad_norm(model: nn.Module) -> float:
-    total = 0.0
-    for p in model.parameters():
-        if p.grad is not None:
-            total += p.grad.norm().item() ** 2
-    return math.sqrt(total)
-
-
-def pixel_accuracy(logits: torch.Tensor, targets: torch.Tensor) -> float:
-    preds = logits.argmax(dim=1)
-    mask = targets != _IGNORE_INDEX
-    if not mask.any():
-        return 0.0
-    correct = (preds[mask] == targets[mask]).float().sum()
-    total = mask.float().sum()
-    return (correct / total).item()
-
-
-def mean_iou(logits: torch.Tensor, targets: torch.Tensor, num_classes: int) -> float:
-    preds = logits.argmax(dim=1)
-    ious = []
-    for c in range(num_classes):
-        pred_c = preds == c
-        target_c = targets == c
-        intersect = (pred_c & target_c).float().sum()
-        union = (pred_c | target_c).float().sum()
-        if union > 0:
-            ious.append((intersect / union).item())
-    return float(np.mean(ious)) if ious else 0.0
 
 
 # =====================================================================
