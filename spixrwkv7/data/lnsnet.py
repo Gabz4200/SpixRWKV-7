@@ -58,11 +58,28 @@ class LNSNetSeedGenerater(nn.Module):
         self.sp_num = n_spix
         self.seed_strategy = seed_strategy
 
-    def seed_generate(self, spix):
-        b, _, h, w = spix.size()
+    def _compute_grid_indices(self, h: int, w: int, device):
+        """Compute grid-based superpixel seed indices and base coordinates."""
         S = h * w / self.sp_num
         sp_h = max(1, int(np.floor(np.sqrt(S) / (w / float(h)))))
         sp_w = max(1, int(np.floor(S / np.floor(sp_h))))
+        sp_c = []
+        for i in range(0, h, sp_h):
+            for j in range(0, w, sp_w):
+                end_x = min(i + sp_h, h) - 1
+                end_y = min(j + sp_w, w) - 1
+                x = (end_x + i) / 2.0
+                y = (end_y + j) / 2.0
+                ind = int(x) * w + int(y)
+                sp_c.append(ind)
+        sp_c = torch.tensor(sp_c, dtype=torch.long, device=device)
+        o_cx = torch.floor(sp_c.float() / float(w))
+        o_cy = sp_c.float() - o_cx * w
+        return sp_h, sp_w, sp_c, o_cx, o_cy
+
+    def seed_generate(self, spix):
+        b, _, h, w = spix.size()
+        sp_h, sp_w, sp_c, o_cx, o_cy = self._compute_grid_indices(h, w, spix.device)
 
         pooled = nn.AdaptiveAvgPool2d((int(np.ceil(h / sp_h)), int(np.ceil(w / sp_w))))(spix)
         pooled = self.c3_seeds_1(pooled)
@@ -73,20 +90,6 @@ class LNSNetSeedGenerater(nn.Module):
         prob = torch.sigmoid(pooled[:, 0].view(b, -1))
         dx = torch.sigmoid(pooled[:, 1].view(b, -1)) - 0.5
         dy = torch.sigmoid(pooled[:, 2].view(b, -1)) - 0.5
-
-        sp_c = []
-        for i in range(0, h, sp_h):
-            for j in range(0, w, sp_w):
-                end_x = min(i + sp_h, h) - 1
-                end_y = min(j + sp_w, w) - 1
-                x = (end_x + i) / 2.0
-                y = (end_y + j) / 2.0
-                ind = int(x) * w + int(y)
-                sp_c.append(ind)
-
-        sp_c = torch.tensor(sp_c, dtype=torch.long, device=spix.device)
-        o_cx = torch.floor(sp_c.float() / float(w))
-        o_cy = sp_c.float() - o_cx * w
 
         dx_subset = dx[:, :len(sp_c)]
         dy_subset = dy[:, :len(sp_c)]
@@ -99,23 +102,7 @@ class LNSNetSeedGenerater(nn.Module):
 
     def grid_seed(self, spix):
         b, _, h, w = spix.size()
-        S = h * w / self.sp_num
-        sp_h = max(1, int(np.floor(np.sqrt(S) / (w / float(h)))))
-        sp_w = max(1, int(np.floor(S / np.floor(sp_h))))
-
-        sp_c = []
-        for i in range(0, h, sp_h):
-            for j in range(0, w, sp_w):
-                end_x = min(i + sp_h, h) - 1
-                end_y = min(j + sp_w, w) - 1
-                x = (end_x + i) / 2.0
-                y = (end_y + j) / 2.0
-                ind = int(x) * w + int(y)
-                sp_c.append(ind)
-
-        sp_c = torch.tensor(sp_c, dtype=torch.long, device=spix.device)
-        o_cx = torch.floor(sp_c.float() / float(w))
-        o_cy = sp_c.float() - o_cx * w
+        _, _, sp_c, o_cx, o_cy = self._compute_grid_indices(h, w, spix.device)
 
         cx = o_cx.unsqueeze(0).expand(b, -1).clamp(0, h - 1)
         cy = o_cy.unsqueeze(0).expand(b, -1).clamp(0, w - 1)

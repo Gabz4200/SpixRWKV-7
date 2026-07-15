@@ -275,6 +275,34 @@ def _in_gamut_mask(linear_rgb: torch.Tensor) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
+# Core clipping helper — handles alpha-channel split/re-concat
+# ---------------------------------------------------------------------------
+
+
+def _clip_core(
+    linear_rgb: torch.Tensor,
+    compute_L0,
+    **clip_kwargs,
+) -> torch.Tensor:
+    """Apply gamut clipping with automatic 4-channel alpha handling.
+
+    ``compute_L0`` is a callable ``(L, C, a_, b_) -> L0`` that computes the
+    target L for the out-of-gamut projection.  Extra keyword arguments are
+    forwarded to ``_apply_clip`` (e.g. ``cusp``).
+    """
+    assert linear_rgb.ndim == 4 and linear_rgb.shape[1] in [3, 4]
+    has_alpha = linear_rgb.shape[1] == 4
+    rgb = linear_rgb[:, 0:3, :, :]
+    mask = _in_gamut_mask(rgb)
+    L, C, a_, b_ = _to_lc_ab(rgb)
+    L0 = compute_L0(L, C, a_, b_)
+    clipped_rgb = torch.where(mask, rgb, _apply_clip(rgb, L, C, a_, b_, L0, **clip_kwargs))
+    if has_alpha:
+        return torch.cat([clipped_rgb, linear_rgb[:, 3:4, :, :]], dim=1)
+    return clipped_rgb
+
+
+# ---------------------------------------------------------------------------
 # Public API — 5 gamut clipping methods
 # ---------------------------------------------------------------------------
 
@@ -291,19 +319,7 @@ def gamut_clip_preserve_chroma(linear_rgb: torch.Tensor) -> torch.Tensor:
     Returns:
         torch.Tensor: (B, 3 or 4, H, W) linear RGB clipped to the sRGB gamut.
     """
-    assert linear_rgb.ndim == 4 and linear_rgb.shape[1] in [3, 4]
-    if linear_rgb.shape[1] == 4:
-        rgb = linear_rgb[:, 0:3, :, :]
-        alpha = linear_rgb[:, 3:4, :, :]
-        mask = _in_gamut_mask(rgb)
-        L, C, a_, b_ = _to_lc_ab(rgb)
-        L0 = L.clamp(0.0, 1.0)
-        clipped_rgb = torch.where(mask, rgb, _apply_clip(rgb, L, C, a_, b_, L0))
-        return torch.cat([clipped_rgb, alpha], dim=1)
-    mask = _in_gamut_mask(linear_rgb)
-    L, C, a_, b_ = _to_lc_ab(linear_rgb)
-    L0 = L.clamp(0.0, 1.0)
-    return torch.where(mask, linear_rgb, _apply_clip(linear_rgb, L, C, a_, b_, L0))
+    return _clip_core(linear_rgb, lambda L, C, a_, b_: L.clamp(0.0, 1.0))
 
 
 def gamut_clip_project_to_0_5(linear_rgb: torch.Tensor) -> torch.Tensor:
@@ -315,19 +331,7 @@ def gamut_clip_project_to_0_5(linear_rgb: torch.Tensor) -> torch.Tensor:
     Returns:
         torch.Tensor: (B, 3 or 4, H, W) clipped linear RGB.
     """
-    assert linear_rgb.ndim == 4 and linear_rgb.shape[1] in [3, 4]
-    if linear_rgb.shape[1] == 4:
-        rgb = linear_rgb[:, 0:3, :, :]
-        alpha = linear_rgb[:, 3:4, :, :]
-        mask = _in_gamut_mask(rgb)
-        L, C, a_, b_ = _to_lc_ab(rgb)
-        L0 = torch.full_like(L, 0.5)
-        clipped_rgb = torch.where(mask, rgb, _apply_clip(rgb, L, C, a_, b_, L0))
-        return torch.cat([clipped_rgb, alpha], dim=1)
-    mask = _in_gamut_mask(linear_rgb)
-    L, C, a_, b_ = _to_lc_ab(linear_rgb)
-    L0 = torch.full_like(L, 0.5)
-    return torch.where(mask, linear_rgb, _apply_clip(linear_rgb, L, C, a_, b_, L0))
+    return _clip_core(linear_rgb, lambda L, C, a_, b_: torch.full_like(L, 0.5))
 
 
 def gamut_clip_project_to_L_cusp(linear_rgb: torch.Tensor) -> torch.Tensor:
@@ -339,23 +343,17 @@ def gamut_clip_project_to_L_cusp(linear_rgb: torch.Tensor) -> torch.Tensor:
     Returns:
         torch.Tensor: (B, 3 or 4, H, W) clipped linear RGB.
     """
-    assert linear_rgb.ndim == 4 and linear_rgb.shape[1] in [3, 4]
-    if linear_rgb.shape[1] == 4:
-        rgb = linear_rgb[:, 0:3, :, :]
-        alpha = linear_rgb[:, 3:4, :, :]
-        mask = _in_gamut_mask(rgb)
-        L, C, a_, b_ = _to_lc_ab(rgb)
+    def _L0_with_cusp(L, C, a_, b_):
         cusp = _find_cusp(a_, b_)
-        L0 = cusp[0]
-        clipped_rgb = torch.where(mask, rgb, _apply_clip(rgb, L, C, a_, b_, L0, cusp=cusp))
-        return torch.cat([clipped_rgb, alpha], dim=1)
-    mask = _in_gamut_mask(linear_rgb)
-    L, C, a_, b_ = _to_lc_ab(linear_rgb)
-    cusp = _find_cusp(a_, b_)
-    L0 = cusp[0]
-    return torch.where(
-        mask, linear_rgb, _apply_clip(linear_rgb, L, C, a_, b_, L0, cusp=cusp)
-    )
+        return cusp[0], cusp
+    L0, cusp = _L0_with_cusp(None, None, *(_to_lc_ab(linear_rgb[:, :3])[-2:]))
+    # Recompute cleanly through _clip_core
+    def _compute(L, C, a_, b_):
+        c = _find_cusp(a_, b_)
+        _compute._cusp = c
+        return c[0]
+    result = _clip_core(linear_rgb, _compute)
+    return result
 
 
 def gamut_clip_adaptive_L0_0_5(
@@ -373,33 +371,16 @@ def gamut_clip_adaptive_L0_0_5(
     Returns:
         torch.Tensor: (B, 3 or 4, H, W) clipped linear RGB.
     """
-    assert linear_rgb.ndim == 4 and linear_rgb.shape[1] in [3, 4]
-    if linear_rgb.shape[1] == 4:
-        rgb = linear_rgb[:, 0:3, :, :]
-        a_chan = linear_rgb[:, 3:4, :, :]
-        mask = _in_gamut_mask(rgb)
-        L, C, a_, b_ = _to_lc_ab(rgb)
+    def _compute(L, C, a_, b_):
         Ld = L - 0.5
         e1 = 0.5 + torch.abs(Ld) + alpha * C
-        L0 = 0.5 * (
+        return 0.5 * (
             1.0
             + Ld
             / torch.sqrt(Ld * Ld + 1e-8)
             * (e1 - torch.sqrt(e1 * e1 - 2.0 * torch.abs(Ld)))
         )
-        clipped_rgb = torch.where(mask, rgb, _apply_clip(rgb, L, C, a_, b_, L0))
-        return torch.cat([clipped_rgb, a_chan], dim=1)
-    mask = _in_gamut_mask(linear_rgb)
-    L, C, a_, b_ = _to_lc_ab(linear_rgb)
-    Ld = L - 0.5
-    e1 = 0.5 + torch.abs(Ld) + alpha * C
-    L0 = 0.5 * (
-        1.0
-        + Ld
-        / torch.sqrt(Ld * Ld + 1e-8)
-        * (e1 - torch.sqrt(e1 * e1 - 2.0 * torch.abs(Ld)))
-    )
-    return torch.where(mask, linear_rgb, _apply_clip(linear_rgb, L, C, a_, b_, L0))
+    return _clip_core(linear_rgb, _compute)
 
 
 def gamut_clip_adaptive_L0_L_cusp(
@@ -417,36 +398,28 @@ def gamut_clip_adaptive_L0_L_cusp(
     Returns:
         torch.Tensor: (B, 3 or 4, H, W) clipped linear RGB.
     """
-    assert linear_rgb.ndim == 4 and linear_rgb.shape[1] in [3, 4]
-    if linear_rgb.shape[1] == 4:
-        rgb = linear_rgb[:, 0:3, :, :]
-        a_chan = linear_rgb[:, 3:4, :, :]
-        mask = _in_gamut_mask(rgb)
-        L, C, a_, b_ = _to_lc_ab(rgb)
+    def _compute(L, C, a_, b_):
         cusp = _find_cusp(a_, b_)
         L_cusp = cusp[0]
         Ld = L - L_cusp
         k = 2.0 * torch.where(Ld > 0.0, 1.0 - L_cusp, L_cusp)
         e1 = 0.5 * k + torch.abs(Ld) + alpha * C / k
-        L0 = L_cusp + 0.5 * (
+        return L_cusp + 0.5 * (
             Ld
             / torch.sqrt(Ld * Ld + 1e-8)
             * (e1 - torch.sqrt(e1 * e1 - 2.0 * k * torch.abs(Ld)))
         )
-        clipped_rgb = torch.where(mask, rgb, _apply_clip(rgb, L, C, a_, b_, L0, cusp=cusp))
-        return torch.cat([clipped_rgb, a_chan], dim=1)
-    mask = _in_gamut_mask(linear_rgb)
-    L, C, a_, b_ = _to_lc_ab(linear_rgb)
-    cusp = _find_cusp(a_, b_)
-    L_cusp = cusp[0]
-    Ld = L - L_cusp
-    k = 2.0 * torch.where(Ld > 0.0, 1.0 - L_cusp, L_cusp)
-    e1 = 0.5 * k + torch.abs(Ld) + alpha * C / k
-    L0 = L_cusp + 0.5 * (
-        Ld
-        / torch.sqrt(Ld * Ld + 1e-8)
-        * (e1 - torch.sqrt(e1 * e1 - 2.0 * k * torch.abs(Ld)))
-    )
-    return torch.where(
-        mask, linear_rgb, _apply_clip(linear_rgb, L, C, a_, b_, L0, cusp=cusp)
-    )
+
+    def _compute_with_cusp(L, C, a_, b_):
+        cusp = _find_cusp(a_, b_)
+        L_cusp = cusp[0]
+        Ld = L - L_cusp
+        k = 2.0 * torch.where(Ld > 0.0, 1.0 - L_cusp, L_cusp)
+        e1 = 0.5 * k + torch.abs(Ld) + alpha * C / k
+        _compute_with_cusp._last_cusp = cusp
+        return L_cusp + 0.5 * (
+            Ld
+            / torch.sqrt(Ld * Ld + 1e-8)
+            * (e1 - torch.sqrt(e1 * e1 - 2.0 * k * torch.abs(Ld)))
+        )
+    return _clip_core(linear_rgb, _compute_with_cusp)
