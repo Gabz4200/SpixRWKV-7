@@ -99,8 +99,14 @@ else:
         )
     )
 
-setup(
-    name="spixrwkv7_kernels",
-    ext_modules=ext_modules,
-    cmdclass={"build_ext": BuildExtension},
-)
+def main():
+    """Entry point for `spixrwkv7-build-kernels` console script."""
+    setup(
+        name="spixrwkv7_kernels",
+        ext_modules=ext_modules,
+        cmdclass={"build_ext": BuildExtension},
+    )
+
+
+if __name__ == "__main__":
+    main()

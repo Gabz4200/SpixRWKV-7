@@ -38,8 +38,8 @@ class OptimizedRecurrentScan(RecurrentScan):
     Falls back to the parent PyTorch loop when the C++ kernel is unavailable.
     """
 
-    def __init__(self, n_embd: int, n_head: int, layer_id: int, n_layer: int):
-        super().__init__(n_embd, n_head, layer_id, n_layer)
+    def __init__(self, n_embd: int, n_head: int, layer_id: int, n_layer: int, drop_prob: float = 0.0):
+        super().__init__(n_embd, n_head, layer_id, n_layer, drop_prob=drop_prob)
 
     def forward(
         self,
@@ -178,8 +178,10 @@ class OptimizedRecurrentScan(RecurrentScan):
 class ParallelRecurrentScan(RecurrentScan):
     """true Blelloch parallel prefix scan O(log N)"""
 
-    def __init__(self, n_embd: int, n_head: int, layer_id: int, n_layer: int):
-        super().__init__(n_embd, n_head, layer_id, n_layer)
+    _eye_cache: dict = {}  # class-level cache for identity matrices
+
+    def __init__(self, n_embd: int, n_head: int, layer_id: int, n_layer: int, drop_prob: float = 0.0):
+        super().__init__(n_embd, n_head, layer_id, n_layer, drop_prob=drop_prob)
 
     def forward(
         self,
@@ -304,7 +306,10 @@ class ParallelRecurrentScan(RecurrentScan):
         # shapes: (B, N, Hd, S, S)
         vk = v_all.unsqueeze(-1) @ kt_all.unsqueeze(-2)  # outer product
         ab = (-kk_all).unsqueeze(-1) @ (kk_all * a_all).unsqueeze(-2)
-        eye = torch.eye(S, device=r_all.device, dtype=torch.float32)
+        cache_key = (S, r_all.device)
+        if cache_key not in ParallelRecurrentScan._eye_cache:
+            ParallelRecurrentScan._eye_cache[cache_key] = torch.eye(S, device=r_all.device, dtype=torch.float32)
+        eye = ParallelRecurrentScan._eye_cache[cache_key]
         A = w_all.float().unsqueeze(-2) * eye + ab.float()  # diag(w) + ab
         B = vk.float()
 
@@ -627,11 +632,11 @@ class OptimizedSpatialMixer(nn.Module):
 
         self.dynamic_offset = DynamicOffset(n_embd)
         if use_parallel:
-            self.scan = ParallelRecurrentScan(n_embd, n_head, layer_id, n_layer)
+            self.scan = ParallelRecurrentScan(n_embd, n_head, layer_id, n_layer, drop_prob=drop_prob)
         elif use_cpp:
-            self.scan = OptimizedRecurrentScan(n_embd, n_head, layer_id, n_layer)
+            self.scan = OptimizedRecurrentScan(n_embd, n_head, layer_id, n_layer, drop_prob=drop_prob)
         else:
-            self.scan = RecurrentScan(n_embd, n_head, layer_id, n_layer)
+            self.scan = RecurrentScan(n_embd, n_head, layer_id, n_layer, drop_prob=drop_prob)
 
         self.fusion_gate = nn.Linear(n_embd, n_embd, bias=False)
         self.att_ln = get_norm_layer(norm_layer)(n_embd)

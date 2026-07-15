@@ -181,8 +181,7 @@ __global__ void assign_pixels_cuda_kernel(
     extern __shared__ float s_mem[];
     float* s_temp = s_mem;
     float* s_sim_buf = s_temp + C;
-    
-    __shared__ int s_valid_idx[128]; // Max window size is 128
+    int* s_valid_idx = reinterpret_cast<int*>(s_sim_buf + 128);
     __shared__ float s_max_sim;
     __shared__ float s_sum_exp;
 
@@ -317,8 +316,8 @@ torch::Tensor assign_pixels_cuda(
     int grid = B * H * W;
     int block = C;
 
-    // Shared memory size: s_temp (C floats) + s_sim_buf (128 floats)
-    size_t shared_mem = (C + 128) * sizeof(float);
+    // Shared memory size: s_temp (C floats) + s_sim_buf (128 floats) + s_valid_idx (128 ints)
+    size_t shared_mem = (C + 128) * sizeof(float) + 128 * sizeof(int);
 
     assign_pixels_cuda_kernel<<<grid, block, shared_mem, stream>>>(
         elem_feats.data_ptr<float>(),

@@ -78,7 +78,7 @@ torch::Tensor spixrwkv7::kernel::recurrent_scan_generic(
     const auto S = r.size(3);
 
     auto out = torch::empty({B, N, Hd, S}, r.options());
-    auto state_out = torch::zeros_like(state);
+    auto state_out = torch::empty_like(state);
 
     float* state_p = state.data_ptr<float>();
     float* state_out_p = state_out.data_ptr<float>();
