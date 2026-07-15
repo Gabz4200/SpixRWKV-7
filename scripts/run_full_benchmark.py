@@ -308,6 +308,9 @@ def train_convergence(model_type, size, config, img_size, device,
     params = list(backbone.parameters()) + list(head.parameters())
     optimizer = torch.optim.AdamW(params, lr=lr, weight_decay=0.0)
 
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+
     # Load real training data (re-used each step for single-batch overfit test)
     x_train, y_train = load_random_caltech101_batch(
         batch_size=batch_size, img_size=img_size, num_classes=num_classes,
@@ -328,19 +331,22 @@ def train_convergence(model_type, size, config, img_size, device,
         head.train()
         optimizer.zero_grad(set_to_none=True)
 
-        outs = backbone(x_train)
-        feat = outs[0]
-        logits = head(feat)
-        loss = F.cross_entropy(logits, y_train)
+        with torch.amp.autocast("cuda", enabled=use_amp):
+            outs = backbone(x_train)
+            feat = outs[0]
+            logits = head(feat)
+            loss = F.cross_entropy(logits, y_train)
 
-        # Add VQ quantization loss if present
-        q_loss = getattr(backbone, "_last_q_loss", None)
-        if q_loss is not None:
-            loss = loss + q_loss
+            # Add VQ quantization loss if present
+            q_loss = getattr(backbone, "_last_q_loss", None)
+            if q_loss is not None:
+                loss = loss + q_loss
 
-        loss.backward()
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(params, max_norm=10.0)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         acc = (logits.argmax(1) == y_train).float().mean().item() * 100
         step_times.append(time.perf_counter() - step_t0)
@@ -544,15 +550,20 @@ def main():
                 step_times_v = []
                 accs_v = []
                 best_acc_v = 0.0
+                use_amp = device.type == "cuda"
+                vit_scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
                 t0 = time.perf_counter()
                 for step in range(1, args.train_steps + 1):
                     st0 = time.perf_counter()
                     vit_model.train()
                     opt.zero_grad(set_to_none=True)
-                    logits = vit_model(x_vit)
-                    loss = F.cross_entropy(logits, y_vit)
-                    loss.backward()
-                    opt.step()
+                    with torch.amp.autocast("cuda", enabled=use_amp):
+                        logits = vit_model(x_vit)
+                        loss = F.cross_entropy(logits, y_vit)
+                    vit_scaler.scale(loss).backward()
+                    vit_scaler.unscale_(opt)
+                    vit_scaler.step(opt)
+                    vit_scaler.update()
                     acc = (logits.argmax(1) == y_vit).float().mean().item() * 100
                     step_times_v.append(time.perf_counter() - st0)
                     accs_v.append(acc)
