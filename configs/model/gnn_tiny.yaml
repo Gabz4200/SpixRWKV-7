@@ -2,12 +2,24 @@
 # Matched to ViT-Tiny parameter count (~5.7M) for fair architecture comparison.
 # GATv2 message passing over superpixel KNN graph replaces RWKV-7 recurrence.
 # 512px input, df=16 (cheap segmentation, fast convergence).
+#
+# Over-smoothing mitigation:
+# - depth=3 (was 6): 36 nodes is a very small graph; >4 GNN layers causes
+#   severe feature collapse.  With knn_k=4, each node sees 4 local neighbours,
+#   so after 3 rounds every node has a 4^3=64-hop receptive field — more than
+#   enough for full coverage of 36 nodes.
+# - register_edge_weight_scale=0.25: 4 register tokens connect to all 36
+#   superpixels (all-to-all), giving each register degree-36 vs degree-8 for
+#   normal nodes.  Without scaling, registers dominate aggregation (the "hub
+#   domination" trap).  0.25× reduces their edge weight to ~25% of the local
+#   KNN weight, letting GATv2 learn to use them without overpowering local
+#   structure.
 model:
   img_size: 512
   embed_dims: 256
   num_heads: 4
-  depth: 6
-  drop_path_rate: 0.0
+  depth: 3
+  drop_path_rate: 0.1
   init_values: 1.0e-5
   final_norm: true
   out_indices: [-1]
@@ -27,4 +39,5 @@ model:
   gnn_conv: gatv2
   gnn_heads: 4
   gnn_aggr: mean
+  register_edge_weight_scale: 0.25
   use_jit: false

@@ -29,7 +29,6 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from torch_geometric.nn import (
-    GATConv,
     GATv2Conv,
     GCNConv,
     GINConv,
@@ -40,6 +39,7 @@ from torch_geometric.nn import (
     SAGEConv,
     TransformerConv,
 )
+from torch_geometric.utils import dense_to_sparse
 
 from spixrwkv7.jit import maybe_compile
 from spixrwkv7.layers.drop import DropPath
@@ -55,7 +55,7 @@ _ATTENTION_CONVS = ("gat", "gatv2", "transformer")
 # =====================================================================
 
 
-def _make_aggr(aggr: str, dim: int):
+def _make_aggr(aggr: str):
     """Build a PyG aggregation operator for SAGEConv.
 
     ``"multi"`` wires a :class:`MultiAggregation` (mean + max + std) so the
@@ -76,7 +76,7 @@ def _build_gnn_conv(
     if conv_type == "graphconv":
         return GraphConv(embed_dims, embed_dims)
     if conv_type == "sage":
-        return SAGEConv(embed_dims, embed_dims, aggr=_make_aggr(aggr, embed_dims))
+        return SAGEConv(embed_dims, embed_dims, aggr=_make_aggr(aggr))
     if conv_type == "gin":
         return GINConv(
             nn.Sequential(
@@ -89,13 +89,13 @@ def _build_gnn_conv(
     if conv_type == "gat":
         return GATConv(embed_dims, embed_dims // heads, heads=heads)
     if conv_type == "gatv2":
-        return GATv2Conv(embed_dims, embed_dims // heads, heads=heads)
+        return GATv2Conv(embed_dims, embed_dims // heads, heads=heads, edge_dim=1, add_self_loops=False)
     if conv_type == "transformer":
-        return TransformerConv(embed_dims, embed_dims // heads, heads=heads)
+        return TransformerConv(embed_dims, embed_dims // heads, heads=heads, edge_dim=1)
     if conv_type == "resgated":
         return ResGatedGraphConv(embed_dims, embed_dims)
     if conv_type == "gated":
-        return GatedGraphConv(embed_dims, num_layers=2)
+        return GatedGraphConv(out_channels=embed_dims, num_layers=2)
     raise ValueError(f"Unknown gnn_conv: {conv_type}")
 
 
@@ -109,12 +109,15 @@ def _gnn_forward(
 ) -> Tensor:
     """Dispatch a forward call, passing edge info only where the layer accepts it.
 
-    GCN/Graph/SAGE accept a 1-D ``edge_weight``; GAT/GATv2/Transformer accept
-    multi-dim ``edge_attr``; GIN/Gated/ResGated operate on node features alone.
+    GCN/Graph/SAGE accept a 1-D ``edge_weight``; GATv2/Transformer accept
+    multi-dim ``edge_attr`` (enabling distance-aware attention); GIN/Gated/
+    ResGated operate on node features alone.
     """
     if conv_type in ("gcn", "graphconv"):
         assert edge_weight is not None
         return conv(x, edge_index, edge_weight=edge_weight)
+    if conv_type in ("gatv2", "transformer"):
+        return conv(x, edge_index, edge_attr=edge_attr)
     return conv(x, edge_index)
 
 
@@ -280,6 +283,66 @@ class GNNBlock(nn.Module):
 
 
 # =====================================================================
+# Global Attention Block — full-graph message passing
+# =====================================================================
+
+
+class GlobalAttentionBlock(nn.Module):
+    """Full-graph attention layer that lets every node attend to every other node.
+
+    When depth < num_superpixels, local KNN message passing cannot propagate
+    information across the full graph within the available layers.  This block
+    adds a complete-graph TransformerConv so every node can exchange features
+    with all other nodes in a single layer.
+
+    Architecture: LayerNorm → TransformerConv(complete graph) → LayerScale
+                  → residual → FFN → residual
+
+    The complete-graph edge index is precomputed once per forward pass and
+    shared across all global attention layers.
+    """
+
+    def __init__(
+        self,
+        embed_dims: int,
+        n_head: int,
+        drop_prob: float = 0.0,
+        init_values: Optional[float] = None,
+        norm_layer: str = "layernorm",
+    ):
+        super().__init__()
+        self.norm1 = get_norm_layer(norm_layer)(embed_dims)
+        self.conv = TransformerConv(
+            embed_dims, embed_dims // n_head, heads=n_head, edge_dim=1,
+        )
+        self.drop_path = DropPath(drop_prob) if drop_prob > 0.0 else nn.Identity()
+        self.ffn = GNNFeedForward(
+            embed_dims,
+            drop_prob=drop_prob,
+            init_values=init_values,
+            norm_layer=norm_layer,
+        )
+        if init_values is not None:
+            self.gamma1 = nn.Parameter(init_values * torch.ones(embed_dims))
+        else:
+            self.gamma1 = None
+
+    def forward(
+        self,
+        x: Tensor,
+        edge_index: Tensor,
+        edge_attr: Optional[Tensor] = None,
+    ) -> Tensor:
+        h = self.norm1(x)
+        out = self.conv(h, edge_index, edge_attr=edge_attr)
+        if self.gamma1 is not None:
+            out = self.gamma1 * out
+        x = x + self.drop_path(out)
+        x = self.ffn(x)
+        return x
+
+
+# =====================================================================
 # GNNVision backbone
 # =====================================================================
 
@@ -322,6 +385,8 @@ class GNNVision(nn.Module):
         gnn_heads: int = 4,
         gnn_aggr: str = "mean",
         jk: str = "none",
+        register_edge_weight_scale: float = 1.0,
+        use_global_attn: bool = True,
         # Attention residual configuration
         use_attnres: bool = False,
         attnres_gate_type: str = "bias",
@@ -345,6 +410,7 @@ class GNNVision(nn.Module):
         self.gnn_heads = gnn_heads
         self.gnn_aggr = gnn_aggr
         self.jk = jk
+        self.register_edge_weight_scale = register_edge_weight_scale
         self.use_attnres = use_attnres
         self.attnres_gate_type = attnres_gate_type
         self.attnres_recency_bias_init = attnres_recency_bias_init
@@ -399,6 +465,26 @@ class GNNVision(nn.Module):
             self.jk_lstm = None
             self.jk_proj = None
 
+        # Global attention layers — full-graph TransformerConv at middle and
+        # end of the stack.  When depth < num_superpixels, local KNN message
+        # passing cannot reach all nodes within the available layers.  These
+        # global layers ensure every node can attend to every other node.
+        self.use_global_attn = use_global_attn
+        self.global_attn_layers = nn.ModuleList()
+        self.global_attn_positions: List[int] = []
+        if use_global_attn and depth >= 2:
+            mid = depth // 2
+            end = depth - 1
+            self.global_attn_positions = [mid, end]
+            for pos in [mid, end]:
+                dp_val = drop_path_rate * pos / max(depth - 1, 1)
+                self.global_attn_layers.append(
+                    GlobalAttentionBlock(
+                        embed_dims, gnn_heads, drop_prob=dp_val,
+                        init_values=init_values, norm_layer=norm_layer,
+                    )
+                )
+
         self.final_norm = final_norm
         if final_norm:
             self.ln1 = get_norm_layer(norm_layer)(embed_dims)
@@ -450,6 +536,7 @@ class GNNVision(nn.Module):
         neighbors: Tensor,
         neighbor_dists: Tensor,
         num_register: int = 0,
+        register_edge_weight_scale: float = 1.0,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """Convert (B, N, k) KNN neighbours into a batched PyG edge set.
 
@@ -457,7 +544,8 @@ class GNNVision(nn.Module):
         the reverse edge (j→i) is also added, ensuring symmetric message
         passing.  When ``num_register > 0``, register nodes (first R indices
         per batch item) are connected to ALL superpixel nodes (bipartite)
-        with inverse-distance weights.
+        with inverse-distance weights, scaled by ``register_edge_weight_scale``
+        to prevent register token hub domination.
 
         Returns ``(edge_index (2, E), edge_weight (E,), edge_attr (E, 1))``
         with global node indices ``b*(N+R) + local`` so graphs for each batch
@@ -500,11 +588,16 @@ class GNNVision(nn.Module):
                 sp_idx = torch.arange(N, device=device).view(1, N)
                 reg_src = (base + reg_idx).expand(R, N).reshape(-1)
                 reg_tgt = (sp_offset + sp_idx).expand(R, N).reshape(-1)
-                all_src.append(reg_src)
-                all_tgt.append(reg_tgt)
-                # Distance-decayed weights for register edges
+                # Distance-decayed weights for register edges, scaled to
+                # prevent register hub domination (see over-smoothing notes).
                 reg_dists = neighbor_dists[b].mean(dim=-1)  # (N,) mean KNN dist per node
                 reg_w = (1.0 / (reg_dists + 1e-6)).unsqueeze(0).expand(R, -1).reshape(-1)
+                reg_w = reg_w * register_edge_weight_scale
+                # Forward: register → superpixel
+                all_src.append(reg_src)
+                all_tgt.append(reg_tgt)
+                all_w.append(reg_w)
+                # Backward: superpixel → register
                 all_src.append(reg_tgt)
                 all_tgt.append(reg_src)
                 all_w.append(reg_w)
@@ -601,7 +694,8 @@ class GNNVision(nn.Module):
 
         # Build edges with register-to-all connectivity.
         edge_index, edge_weight, edge_attr = self._build_edges(
-            neighbors, neighbor_dists, num_register=self.register_tokens
+            neighbors, neighbor_dists, num_register=self.register_tokens,
+            register_edge_weight_scale=self.register_edge_weight_scale,
         )
 
         # Flatten to global node tensor for PyG message passing.
@@ -615,6 +709,17 @@ class GNNVision(nn.Module):
         attnres_history: Optional[list] = [x_nodes] if self.use_attnres else None
         outs: List[Tensor] = []
 
+        # Build complete-graph edge index for global attention layers.
+        # Shape: (2, N_total^2) — every node attends to every other node.
+        N_total = tokens.shape[1]  # R + N
+        if self.use_global_attn and len(self.global_attn_layers) > 0:
+            adj = torch.ones(N_total, N_total, device=x_nodes.device)
+            global_edge_index, _ = dense_to_sparse(adj)
+            global_edge_attr = torch.ones(
+                global_edge_index.shape[1], 1, device=x_nodes.device,
+            )
+        global_attn_idx = 0
+
         for i, block in enumerate(self.blocks):
             if self.use_attnres and attnres_history is not None:
                 x_nodes = block(x_nodes, edge_index, edge_weight, edge_attr, attnres_history=attnres_history)
@@ -622,6 +727,15 @@ class GNNVision(nn.Module):
                     attnres_history.append(x_nodes)
             else:
                 x_nodes = block(x_nodes, edge_index, edge_weight, edge_attr)
+
+            # Apply global attention at computed positions.
+            if (self.use_global_attn
+                    and global_attn_idx < len(self.global_attn_positions)
+                    and i == self.global_attn_positions[global_attn_idx]):
+                x_nodes = self.global_attn_layers[global_attn_idx](
+                    x_nodes, global_edge_index, global_edge_attr,
+                )
+                global_attn_idx += 1
 
             if need_jk:
                 jk_layers.append(x_nodes)
@@ -693,6 +807,8 @@ def create_gnn_vision(
     gnn_heads: int = 4,
     gnn_aggr: str = "mean",
     jk: str = "none",
+    register_edge_weight_scale: float = 1.0,
+    use_global_attn: bool = True,
     use_attnres: bool = False,
     attnres_gate_type: str = "bias",
     attnres_recency_bias_init: float = 10.0,
@@ -732,6 +848,8 @@ def create_gnn_vision(
         gnn_heads=gnn_heads,
         gnn_aggr=gnn_aggr,
         jk=jk,
+        register_edge_weight_scale=register_edge_weight_scale,
+        use_global_attn=use_global_attn,
         use_attnres=use_attnres,
         attnres_gate_type=attnres_gate_type,
         attnres_recency_bias_init=attnres_recency_bias_init,

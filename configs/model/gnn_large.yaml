@@ -4,11 +4,17 @@
 # img_size=-1 => native-resolution input; the GNN processes only 256 superpixel
 # tokens, so backbone FLOPS are img_size-independent. Requires native height
 # >= ~256 so the segmentation grid (native/df) fits 256 superpixels. df=16.
+#
+# Over-smoothing mitigation:
+# - jk="lstm": Jumping Knowledge preserves multi-scale features across 8
+#   layers of message passing on 256 nodes.  Without JK, deep GNN stacks
+#   collapse all nodes to similar representations.
+# - No register tokens (register_tokens=0) so no hub domination risk.
 model:
   img_size: -1
   embed_dims: 768
   num_heads: 12
-  depth: 12
+  depth: 8
   drop_path_rate: 0.3
   init_values: 1.0e-5
   final_norm: true
@@ -29,4 +35,5 @@ model:
   gnn_conv: gatv2
   gnn_heads: 4
   gnn_aggr: mean
+  jk: lstm
   use_jit: false
