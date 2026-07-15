@@ -16,7 +16,7 @@ The architecture merges the linear-complexity, constant-memory advantages of the
 - **Conv-Stem Vision-RWKV-7 variant**: Two-stream tokenizer with strided convolutions before diffSLIC. Converges fastest (2-3 steps) but slowest inference due to deep backbone. Configs: `conv_tiny/small/medium/large.yaml`.
 - **VQ-VAE Tokenization Ablation**: Learned VQ-VAE tokenizer replaces superpixels. Discrete codebook prior provides cleaner gradients but adds significant compute overhead. Configs: `vq_tiny/small/medium/large.yaml`.
 - **Real image test data**: `data/caltech101_classification/` with 223 images (butterfly, dalmatian, dolphin). ALL scripts load real images instead of random noise.
-- **Optimized C++ kernels**: AVX512-optimized RWKV-7 recurrence and diffSLIC kernels. Enabled via `use_cpp=True` flag.
+- **Optimized C++ kernels**: AVX2-accelerated RWKV-7 recurrence and diffSLIC kernels registered via `TORCH_LIBRARY` for `torch.compile` support. Enabled via `use_cpp=True` flag. Speedups: 1.2-1.6x across all 5 model variants (spix, conv, gnn, hybrid, vq). diffSLIC alone shows 3.5x speedup.
 - **RMSNorm + SwiGLU**: Configurable normalization and activation across all variants.
 - **Full benchmark suite**: `scripts/run_full_benchmark.py` — inference speed + training convergence for all 4 variants vs ViT.
 + **Architectural Enhancements (RMSNorm & SwiGLU)**: Added support for configurable normalization layers (`norm_layer="layernorm"|"rmsnorm"`) and activation functions (`act_layer="relu2"|"gelu"|"silu"|"swiglu"`) across the backbone, blocks, spatial/channel mixers, and classification head. RMSNorm and SwiGLU activations are inspired by modern vision/language architectures like DINOv3 and LLaMA, providing greater parameter efficiency and expressive capacity.
@@ -153,6 +153,39 @@ uv run python scripts/run_full_benchmark.py --sizes tiny small --img-size 256
 uv run python scripts/compare_architectures.py --downsample-factors 1.0 2.0 4.0
 uv run python scripts/compare_architectures_alt_vit.py --downsample-factors 1.0 2.0 4.0
 uv run python tasks/diagnostics/fast_test_training.py --downsample-factors 1.0 2.0 4.0
+```
+
+### C++ Kernel Speedup (all 5 model variants)
+
+Benchmark measuring the speedup from C++ AVX2-accelerated kernels (RWKV-7 recurrence + diffSLIC) vs pure PyTorch, across all 5 model variants. Uses `TORCH_LIBRARY` registration for `torch.compile` compatibility.
+
+#### Kernel-Level Speedup (128px input, tiny config, CPU)
+
+| Kernel | PyTorch (ms) | C++ (ms) | Speedup |
+| :--- | :--- | :--- | :--- |
+| **diffSLIC** (cluster update + assign) | 140.51 | 40.26 | **3.49x** |
+| **RecurrentScan** (N=36, D=192) | 45.96 | 33.19 | 1.38x |
+| **RecurrentScan** (N=144, D=192) | 148.14 | 111.95 | 1.32x |
+
+#### Full Model Speedup (128px input, tiny config, CPU)
+
+| Model | Params | PyTorch (ms) | C++ (ms) | Speedup |
+| :--- | :--- | :--- | :--- | :--- |
+| **spix** | 1.33M | 205.65 | 154.88 | **1.33x** |
+| **conv** | 1.35M | 150.49 | 126.53 | **1.19x** |
+| **gnn** | 0.83M | 106.72 | 78.58 | **1.36x** |
+| **hybrid** | 2.00M | 214.69 | 145.96 | **1.47x** |
+| **vq** | 3.38M | 3907.83 | 2523.89 | **1.55x** |
+
+**Key findings**:
+- **diffSLIC is the biggest winner**: 3.49x speedup from fused C++ cluster update + pixel assignment (OpenMP + stack-allocated buffers vs PyTorch `unfold` + `einsum` + `softmax`)
+- **RecurrentScan**: 1.3-1.4x speedup from AVX2 FMA dot products and fused state update loop
+- **All 5 variants benefit**: C++ kernels are wired through `use_cpp=True` into every model's tokenizer and recurrence
+- **hybrid and vq see largest speedup** (1.47x, 1.55x) because they have deeper recurrence or more diffSLIC iterations
+
+Run the benchmark:
+```bash
+uv run python scripts/benchmark_cpp_vs_py.py
 ```
 
 ### Full 4-Variant Benchmark Results
