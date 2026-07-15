@@ -1,44 +1,86 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "spixrwkv7"
 version = "1.0.0"
 description = "SpixRWKV-7: Superpixel Graph RWKV-7 Vision Backbone"
 readme = "README.md"
-requires-python = ">=3.11,<3.14"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [
+    { name = "Gabz4200" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "numpy>=1.26.0",
-    "torch>=2.12.0",
-    "pytest>=7.0.0",
-    "opencv-python>=4.13.0.92",
-    "scipy>=1.17.1",
-    "scikit-learn>=1.9.0",
-    "scikit-image>=0.26.0",
-    "pillow>=12.2.0",
-    "matplotlib>=3.11.0",
-    "torchvision>=0.27.0",
-    "datasets>=5.0.0",
-    "einops>=0.8.0",
-    "torch-geometric>=2.0.0",
+    "torch>=2.0.0",
+    "pillow>=9.0.0",
+    "einops>=0.6.0",
 ]
 
-[[tool.uv.index]]
-name = "pytorch"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
+[project.optional-dependencies]
+vision = [
+    "torchvision>=0.15.0",
+    "opencv-python>=4.8.0",
+    "scikit-image>=0.21.0",
+    "scipy>=1.11.0",
+    "matplotlib>=3.7.0",
+]
+gnn = [
+    "torch-geometric>=2.3.0",
+]
+training = [
+    "scikit-learn>=1.3.0",
+    "datasets>=2.14.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+]
+all = [
+    "spixrwkv7[vision,gnn,training,dev]",
+]
 
-[tool.uv]
-environments = ["sys_platform == 'linux'" ]
-find-links = ["https://data.pyg.org/whl/torch-2.12.1+cpu.html"]
+[project.urls]
+Homepage = "https://github.com/Gabz4200/SpixRWKV7"
+Repository = "https://github.com/Gabz4200/SpixRWKV7"
+Issues = "https://github.com/Gabz4200/SpixRWKV7/issues"
 
-[tool.uv.sources]
-torch = { index = "pytorch" }
-torchvision = { index = "pytorch" }
+[project.scripts]
+spixrwkv7-build-kernels = "spixrwkv7.kernels.setup:main"
+
+[tool.setuptools.packages.find]
+include = ["spixrwkv7*"]
+
+[tool.setuptools.package-data]
+"spixrwkv7.kernels" = [
+    "cpp/*.cpp",
+    "cpp/*.hpp",
+    "cpp/*.cu",
+    "cpp/*.h",
+]
+"spixrwkv7" = [
+    "configs/**/*.yaml",
+]
+
+[tool.setuptools.data-files]
+"configs/model" = [
+    "configs/model/*.yaml",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-
-[tool.setuptools.packages.find]
-include = ["spixrwkv7*"]
 
 [tool.ruff]
 line-length = 100
@@ -47,3 +89,16 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 ignore = ["E501"]
+
+[tool.uv]
+environments = ["sys_platform == 'linux'"]
+find-links = ["https://data.pyg.org/whl/torch-2.12.1+cpu.html"]
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

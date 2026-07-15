@@ -1,0 +1,13 @@
+include LICENSE
+include README.md
+include pyproject.toml
+
+recursive-include spixrwkv7/kernels/cpp *.cpp *.hpp *.cu *.h
+recursive-include configs *.yaml
+recursive-include tasks *.py
+recursive-include scripts *.py
+recursive-include tests *.py
+
+global-exclude __pycache__
+global-exclude *.pyc
+global-exclude *.pyo
