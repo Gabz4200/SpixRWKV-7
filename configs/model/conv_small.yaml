@@ -32,5 +32,5 @@ model:
   conv_stem_channels: [64, 128, 256]
   conv_stem_kernel_sizes: [3, 5, 5]
   conv_stem_strides: [1, 2, 2]
-  conv_stem_norm: batchnorm2d
+  conv_stem_norm: layernorm
   conv_post_norm: layernorm

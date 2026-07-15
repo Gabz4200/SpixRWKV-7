@@ -7,7 +7,7 @@ model:
   embed_dims: 192
   num_heads: 3
   depth: 7
-  drop_path_rate: 0.0
+  drop_path_rate: 0.1
   init_values: 1.0e-5
   final_norm: true
   out_indices: [-1]
@@ -32,5 +32,5 @@ model:
   conv_stem_channels: [32, 64, 128]
   conv_stem_kernel_sizes: [3, 5, 5]
   conv_stem_strides: [1, 2, 2]
-  conv_stem_norm: batchnorm2d
+  conv_stem_norm: layernorm
   conv_post_norm: layernorm

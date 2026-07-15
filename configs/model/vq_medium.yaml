@@ -14,7 +14,7 @@ model:
   output_cls_token: false
   register_tokens: 0
   scatter_output: false
-  codebook_size: 1024
+  codebook_size: 512
   downsample_factor: 16
   latent_dim: null
   num_res_blocks: 2
