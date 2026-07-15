@@ -1,24 +1,14 @@
-// SpixRWKV-7: diffSLIC kernel implementation (generic + dispatcher)
+// SpixRWKV-7: diffSLIC kernel implementation (generic)
 #include "diff_slic_kernel.hpp"
 #include "cpu_features.hpp"
 #include <vector>
 #include <cmath>
-#include <algorithm>
 #include <cstring>
 
 using namespace spixrwkv7::kernel;
 
 // ===================================================================
 // Generic cluster update
-// For each cluster center (i,j), extract a DENSE window of pixels of size
-// (stride*(2r+1)) x (stride*(2r+1)) around the center's pixel position
-// (i*stride, j*stride), compute raw dot-product similarities, softmax them
-// (divided by tau), and aggregate the pixel features. Out-of-bounds pixels
-// are masked (similarity -> -1e9), matching the PyTorch reference
-// (spixrwkv7/data/diff_slic.py, compute_center_to_elem_assignment +
-// _masked_softmax). No cosine normalization is applied (the reference uses
-// raw dot products). When `normalize` is true, the aggregated cluster
-// feature is L2-normalized (matching the Python wrapper).
 // ===================================================================
 
 torch::Tensor spixrwkv7::kernel::update_clusters_generic(
@@ -41,9 +31,9 @@ torch::Tensor spixrwkv7::kernel::update_clusters_generic(
     float* result = out.data_ptr<float>();
 
     const int64_t clst_sz = (int64_t)h_s * w_s;
-    const int64_t clst_stride = C * clst_sz;  // B stride
+    const int64_t clst_stride = C * clst_sz;
     const int64_t elem_sz = (int64_t)H * W;
-    const int64_t elem_stride = C * elem_sz;  // B stride
+    const int64_t elem_stride = C * elem_sz;
 
     const int half_h = stride_h * radius;
     const int half_w = stride_w * radius;
@@ -72,12 +62,12 @@ torch::Tensor spixrwkv7::kernel::update_clusters_generic(
                                 float p_val = elem[b * elem_stride + c * elem_sz + py * W + px];
                                 sim += c_val * p_val;
                             }
-                            if (sim == 0.0f) sim = -1e9f;  // masked like reference
+                            if (sim == 0.0f) sim = -1e9f;
                             else sim = sim / tau;
                             sim_buf[k] = sim;
                             if (sim > max_sim) max_sim = sim;
                         } else {
-                            sim_buf[k] = -1e9f;  // OOB -> masked
+                            sim_buf[k] = -1e9f;
                         }
                     }
                 }
@@ -85,8 +75,7 @@ torch::Tensor spixrwkv7::kernel::update_clusters_generic(
                 float sum_exp = 0.0f;
                 for (int k = 0; k < n; k++) {
                     if (sim_buf[k] > -1e8f) {
-                        const float sim = sim_buf[k] - max_sim;
-                        sum_exp += std::exp(sim);
+                        sum_exp += std::exp(sim_buf[k] - max_sim);
                     }
                 }
                 const float inv_sum = 1.0f / (sum_exp + 1e-10f);
@@ -130,10 +119,6 @@ torch::Tensor spixrwkv7::kernel::update_clusters_generic(
 
 // ===================================================================
 // Generic pixel-to-superpixel assignment
-// For each pixel, compute raw dot-product similarity with the (2r+1)^2
-// neighbouring cluster centers (zero-padded / masked when out of bounds),
-// divide by tau, softmax over the candidate centers. Output (B, nn*nn, H, W).
-// Matches compute_elem_to_center_assignment in spixrwkv7/data/diff_slic.py.
 // ===================================================================
 
 torch::Tensor spixrwkv7::kernel::assign_pixels_generic(
@@ -203,8 +188,7 @@ torch::Tensor spixrwkv7::kernel::assign_pixels_generic(
                     for (int dj = -radius; dj <= radius; dj++) {
                         const int flat = (di + radius) * nn + (dj + radius);
                         if (valid[flat]) {
-                            const float sim = sim_buf[flat] - max_sim;
-                            sum_exp += std::exp(sim);
+                            sum_exp += std::exp(sim_buf[flat] - max_sim);
                         }
                     }
                 }
@@ -228,15 +212,7 @@ torch::Tensor spixrwkv7::kernel::assign_pixels_generic(
 }
 
 // ===================================================================
-// Python-facing dispatcher — wraps with CPU feature detection.
-//
-// The diffSLIC operation is not on the model's critical path, and the
-// previous AVX2/AVX512 variants duplicated the generic algorithm and
-// drifted out of sync with the PyTorch reference. To guarantee correctness
-// the dispatcher always uses the single authoritative generic
-// implementation above; the optimized builder's speed comes from the
-// recurrent-scan SIMD path. The AVX2/AVX512 translation units delegate to
-// these generics.
+// Dispatchers with validation
 // ===================================================================
 
 namespace spixrwkv7 {

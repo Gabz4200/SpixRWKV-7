@@ -9,7 +9,6 @@
 #include <vector>
 #include <omp.h>
 
-// AVX2 intrinsics for vectorization
 #if defined(__AVX2__)
 #include <immintrin.h>
 #endif
@@ -17,27 +16,18 @@
 using namespace spixrwkv7::kernel;
 
 // ===================================================================
-// AVX2 helper: horizontal sum of 8 floats (AVX2 version)
-// AVX512 has _mm512_reduce_add_ps, but AVX2 needs manual reduction
+// AVX2 helpers (compile-time gated)
 // ===================================================================
 #if defined(__AVX2__)
 static inline float hsum_avx2(__m256 v) {
-    // Extract high and low 128-bit halves and add
     __m128 v_lo = _mm256_castps256_ps128(v);
     __m128 v_hi = _mm256_extractf128_ps(v, 1);
     __m128 sum128 = _mm_add_ps(v_lo, v_hi);
-    // Horizontal add of 4 floats
     sum128 = _mm_hadd_ps(sum128, sum128);
     sum128 = _mm_hadd_ps(sum128, sum128);
     return _mm_cvtss_f32(sum128);
 }
-#endif
 
-// ===================================================================
-// AVX2 helper: dot product of two 64-float vectors using AVX2
-// Handles S=64 with 8-wide vectors (8 iterations)
-// ===================================================================
-#if defined(__AVX2__)
 static inline float dot_64_avx2(const float* a, const float* b) {
     __m256 sum0 = _mm256_setzero_ps();
     __m256 sum1 = _mm256_setzero_ps();
@@ -48,7 +38,6 @@ static inline float dot_64_avx2(const float* a, const float* b) {
     __m256 sum6 = _mm256_setzero_ps();
     __m256 sum7 = _mm256_setzero_ps();
 
-    // 8 AVX2 vectors = 64 floats
     sum0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 0),   _mm256_loadu_ps(b + 0),   sum0);
     sum1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 8),   _mm256_loadu_ps(b + 8),   sum1);
     sum2 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 16),  _mm256_loadu_ps(b + 16),  sum2);
@@ -71,65 +60,7 @@ static inline float dot_64_avx2(const float* a, const float* b) {
 #endif
 
 // ===================================================================
-// AVX2 helper: compute sum over j of a[j] * b[j] * c[j] (element-wise product)
-// ===================================================================
-#if defined(__AVX2__)
-static inline float dot_triple_64_avx2(const float* a, const float* b, const float* c) {
-    __m256 sum0 = _mm256_setzero_ps();
-    __m256 sum1 = _mm256_setzero_ps();
-    __m256 sum2 = _mm256_setzero_ps();
-    __m256 sum3 = _mm256_setzero_ps();
-    __m256 sum4 = _mm256_setzero_ps();
-    __m256 sum5 = _mm256_setzero_ps();
-    __m256 sum6 = _mm256_setzero_ps();
-    __m256 sum7 = _mm256_setzero_ps();
-
-    // Load and multiply a*b, then multiply by c
-    __m256 ab0 = _mm256_mul_ps(_mm256_loadu_ps(a + 0),   _mm256_loadu_ps(b + 0));
-    __m256 ab1 = _mm256_mul_ps(_mm256_loadu_ps(a + 8),   _mm256_loadu_ps(b + 8));
-    __m256 ab2 = _mm256_mul_ps(_mm256_loadu_ps(a + 16),  _mm256_loadu_ps(b + 16));
-    __m256 ab3 = _mm256_mul_ps(_mm256_loadu_ps(a + 24),  _mm256_loadu_ps(b + 24));
-    __m256 ab4 = _mm256_mul_ps(_mm256_loadu_ps(a + 32),  _mm256_loadu_ps(b + 32));
-    __m256 ab5 = _mm256_mul_ps(_mm256_loadu_ps(a + 40),  _mm256_loadu_ps(b + 40));
-    __m256 ab6 = _mm256_mul_ps(_mm256_loadu_ps(a + 48),  _mm256_loadu_ps(b + 48));
-    __m256 ab7 = _mm256_mul_ps(_mm256_loadu_ps(a + 56),  _mm256_loadu_ps(b + 56));
-
-    sum0 = _mm256_mul_ps(ab0, _mm256_loadu_ps(c + 0));
-    sum1 = _mm256_mul_ps(ab1, _mm256_loadu_ps(c + 8));
-    sum2 = _mm256_mul_ps(ab2, _mm256_loadu_ps(c + 16));
-    sum3 = _mm256_mul_ps(ab3, _mm256_loadu_ps(c + 24));
-    sum4 = _mm256_mul_ps(ab4, _mm256_loadu_ps(c + 32));
-    sum5 = _mm256_mul_ps(ab5, _mm256_loadu_ps(c + 40));
-    sum6 = _mm256_mul_ps(ab6, _mm256_loadu_ps(c + 48));
-    sum7 = _mm256_mul_ps(ab7, _mm256_loadu_ps(c + 56));
-
-    sum0 = _mm256_add_ps(sum0, sum1);
-    sum2 = _mm256_add_ps(sum2, sum3);
-    sum4 = _mm256_add_ps(sum4, sum5);
-    sum6 = _mm256_add_ps(sum6, sum7);
-    sum0 = _mm256_add_ps(sum0, sum2);
-    sum4 = _mm256_add_ps(sum4, sum6);
-    sum0 = _mm256_add_ps(sum0, sum4);
-
-    return hsum_avx2(sum0);
-}
-#endif
-
-// ===================================================================
 // Generic implementation (any CPU) - GGML-style parallelization
-// ===================================================================
-// The state update: state = state * w + state @ ab + vk
-// where ab and vk are rank-1:
-//   vk[i][j] = v[i] * kt[j]
-//   ab[k][j] = -kk[k] * kk[j] * a[j]
-//
-// Using the rank-1 structure:
-//   (state @ ab)[i][j] = -sum_state_kk[i] * kk[j] * a[j]
-//   where sum_state_kk[i] = sum_k state[i][k] * kk[k]
-//
-// GGML parallelization pattern:
-//   for (h = ith; h < Hd; h += nth) across threads
-//   state_in switches from input state (t=0) to state_out (t>0)
 // ===================================================================
 
 torch::Tensor spixrwkv7::kernel::recurrent_scan_generic(
@@ -147,7 +78,7 @@ torch::Tensor spixrwkv7::kernel::recurrent_scan_generic(
     const auto S = r.size(3);
 
     auto out = torch::empty({B, N, Hd, S}, r.options());
-    auto state_out = torch::zeros_like(state);  // GGML pattern: separate output buffer
+    auto state_out = torch::zeros_like(state);
 
     float* state_p = state.data_ptr<float>();
     float* state_out_p = state_out.data_ptr<float>();
@@ -163,13 +94,6 @@ torch::Tensor spixrwkv7::kernel::recurrent_scan_generic(
     const int64_t timestep_stride = Hd * S;
     const int64_t batch_head_stride = Hd * S * S;
 
-    // AVX2: VEC_SIZE = 8 floats per register, 8 vectors per row for S=64
-    static constexpr int VEC_SIZE = 8;
-    static constexpr int VEC_PER_ROW = 64 / VEC_SIZE; // 8
-
-    // GGML-style parallelization: parallel over heads within each timestep
-    // Each head's state slice is independent, but timesteps are sequential
-    // Pattern: for (h = ith; h < Hd; h += nth)
     #pragma omp parallel
     {
         int ith = omp_get_thread_num();
@@ -179,9 +103,7 @@ torch::Tensor spixrwkv7::kernel::recurrent_scan_generic(
             float* base_state = state_p + b * batch_head_stride;
 
             for (int64_t t = 0; t < N; t++) {
-                // Within a timestep, parallelize over heads (GGML pattern)
                 for (int64_t h = ith; h < Hd; h += nth) {
-                    // GGML pattern: state_in reads from state (t=0) or state_out (t>0)
                     float* state_in = (t == 0) ? base_state : state_out_p + b * batch_head_stride;
                     float* state_t = state_out_p + b * batch_head_stride;
 
@@ -214,38 +136,32 @@ torch::Tensor spixrwkv7::kernel::recurrent_scan_generic(
                     // Phase 2: new_state[i][j] = old[i][j] * w[j] + v[i] * kt[j]
                     //                            - sum_state_kk[i] * kk[j] * a[j]
 #if defined(__AVX2__)
-                    // Pre-load vectors for this timestep+head
-                    __m256 w_vec[VEC_PER_ROW];
-                    __m256 kk_vec[VEC_PER_ROW];
-                    __m256 kt_vec[VEC_PER_ROW];
-                    __m256 a_vec[VEC_PER_ROW];
-                    for (int v = 0; v < VEC_PER_ROW; v++) {
-                        int off = v * VEC_SIZE;
-                        w_vec[v]  = _mm256_loadu_ps(w_t + off);
-                        kk_vec[v] = _mm256_loadu_ps(kk_t + off);
-                        kt_vec[v] = _mm256_loadu_ps(kt_t + off);
-                        a_vec[v]  = _mm256_loadu_ps(a_t + off);
+                    __m256 w_vec[8], kk_vec[8], kt_vec[8], a_vec[8];
+                    for (int vi = 0; vi < 8; vi++) {
+                        int off = vi * 8;
+                        w_vec[vi]  = _mm256_loadu_ps(w_t + off);
+                        kk_vec[vi] = _mm256_loadu_ps(kk_t + off);
+                        kt_vec[vi] = _mm256_loadu_ps(kt_t + off);
+                        a_vec[vi]  = _mm256_loadu_ps(a_t + off);
                     }
 
                     for (int i = 0; i < S; i++) {
-                        float* row = st_out + i * S;
                         const float v_i = v_t[i];
                         const float s_kk_i = sum_state_kk[i];
 
                         __m256 vi_vec = _mm256_set1_ps(v_i);
                         __m256 skk_vec = _mm256_set1_ps(s_kk_i);
 
-                        for (int v = 0; v < VEC_PER_ROW; v++) {
-                            int off = v * VEC_SIZE;
-                            // row[j] = row[j] * w[j] + v[i] * kt[j] - s_kk[i] * kk[j] * a[j]
-                            __m256 row_v = _mm256_loadu_ps(row + off);
-                            __m256 w_mul = _mm256_mul_ps(row_v, w_vec[v]);
-                            __m256 vt_mul = _mm256_mul_ps(vi_vec, kt_vec[v]);
-                            __m256 kk_a = _mm256_mul_ps(kk_vec[v], a_vec[v]);
+                        for (int vi = 0; vi < 8; vi++) {
+                            int off = vi * 8;
+                            __m256 in_v = _mm256_loadu_ps(st_in + i * S + off);
+                            __m256 w_mul = _mm256_mul_ps(in_v, w_vec[vi]);
+                            __m256 vt_mul = _mm256_mul_ps(vi_vec, kt_vec[vi]);
+                            __m256 kk_a = _mm256_mul_ps(kk_vec[vi], a_vec[vi]);
                             __m256 skk_kk_a = _mm256_mul_ps(skk_vec, kk_a);
                             __m256 new_row = _mm256_add_ps(w_mul, vt_mul);
                             new_row = _mm256_sub_ps(new_row, skk_kk_a);
-                            _mm256_storeu_ps(row + off, new_row);
+                            _mm256_storeu_ps(st_out + i * S + off, new_row);
                         }
                     }
 #else
@@ -261,7 +177,7 @@ torch::Tensor spixrwkv7::kernel::recurrent_scan_generic(
                     }
 #endif
 
-                    // Phase 3: output = state_out @ r (using updated state)
+                    // Phase 3: output = state_out @ r
 #if defined(__AVX2__)
                     for (int i = 0; i < S; i++) {
                         const float* row = st_out + i * S;
@@ -286,20 +202,8 @@ torch::Tensor spixrwkv7::kernel::recurrent_scan_generic(
 }
 
 // ===================================================================
-// Dispatcher
+// Dispatcher with state persistence
 // ===================================================================
-//
-// *** GREAT DESIGN: GGML-style OpenMP parallelisation ***
-// Each thread owns a disjoint stripe of heads (h = ith, ith+nth, ...).
-// Because every head's S×S state slice is independent, there is zero
-// false sharing between threads — this is the same pattern used by
-// llama.cpp / ggml for their matrix multiply kernels.
-//
-// *** GREAT DESIGN: Stable softmax ***
-// The w values are produced by exp(-0.606531 * sigmoid(w_raw)), which
-// guarantees w ∈ (0, 1) regardless of network output scale.  Combined
-// with the L2-normalisation of kk (‖kk‖₂ = 1), the recurrence is
-// numerically bounded at every step.
 
 namespace spixrwkv7 {
 namespace kernel {
@@ -313,7 +217,6 @@ torch::Tensor rwkv7_recurrent_scan(
     const torch::Tensor& kk,
     const torch::Tensor& kt)
 {
-    // Shape and dtype validation
     TORCH_CHECK(state.dim() == 4, "state must be 4D (B, Hd, S, S)");
     TORCH_CHECK(r.dim() == 4, "r must be 4D (B, N, Hd, S)");
     TORCH_CHECK(state.dtype() == torch::kFloat32, "state must be float32");
@@ -341,15 +244,6 @@ torch::Tensor rwkv7_recurrent_scan(
     TORCH_CHECK(state.size(3) == S, "State size mismatch (dim 3)");
     TORCH_CHECK(S <= 64, "HEAD_SIZE (S) must be <= 64, got ", S);
 
-    // Dispatch to best available implementation
-    // *** GREAT DESIGN: Rank-1 optimisation ***
-    // The state update: S' = S*diag(w) + v⊗kt - (S·kk)⊗(kk*a)
-    // Both update terms are rank-1 outer products.  This collapses the
-    // naive O(S³) update (full outer product accumulation) to O(S²):
-    //   phase 1: sum_kk[i] = S[i,:] · kk        (S dot products → O(S²))
-    //   phase 2: S'[i,j] = S[i,j]*w[j] + v[i]*kt[j] - sum_kk[i]*kk[j]*a[j]
-    //            (single fused row pass → O(S²) total)
-    // The same trick is used in RWKV-7 (arXiv:2503.14456) and llama.cpp.
     return recurrent_scan_generic(state, r, v, w, a, kk, kt);
 }
 
