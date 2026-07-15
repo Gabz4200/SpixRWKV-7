@@ -2,33 +2,18 @@
   SpixRWKV-7 FULL BENCHMARK SUITE
 ==============================================================================
   Device:     cpu
-  Sizes:      ['tiny']
+  Sizes:      ['small']
   Img size:   256
   Classes:    3 (caltech101: butterfly, dalmatian, dolphin)
   C++ kernels: ENABLED (where applicable)
 ==============================================================================
 
 ==============================================================================
-  SIZE: TINY
+  SIZE: SMALL
 ==============================================================================
 
   ──────────────────────────────────────────────────────────────────────────
   TRAINING CONVERGENCE BENCHMARK (single-batch overfit)
   ──────────────────────────────────────────────────────────────────────────
 
-  [SPIX] Training for up to 300 steps...
-  [SPIX] Steps: 37, Best acc: 100.0%, Final loss: 0.4833
-    Steps to 90%: 37, Steps to 95%: 37
-    Total time: 142.7s, Step time: 3856ms
-
-  [VQ] Training for up to 300 steps...
-  [VQ] Steps: 35, Best acc: 100.0%, Final loss: 19.4069
-    Steps to 90%: 35, Steps to 95%: 35
-    Total time: 371.5s, Step time: 10613ms
-
-  [CONV] Training for up to 300 steps...
-  [CONV] Steps: 4, Best acc: 100.0%, Final loss: 0.6417
-    Steps to 90%: 4, Steps to 95%: 4
-    Total time: 14.6s, Step time: 3647ms
-
-  [GNN] Training for up to 300 steps...
+  [SPIX] Training for up to 50 steps...
