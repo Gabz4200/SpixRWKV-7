@@ -162,18 +162,9 @@ class GNNFeedForward(nn.Module):
             self.gamma2 = None
 
     def forward(self, x: Tensor) -> Tensor:
+        from spixrwkv7.models.common import apply_activation
         xn = self.norm(x)
-        if self.act_layer == "relu2":
-            k = F.relu(self.ffn_key(xn)).pow(2)
-        elif self.act_layer == "gelu":
-            k = F.gelu(self.ffn_key(xn))
-        elif self.act_layer == "silu":
-            k = F.silu(self.ffn_key(xn))
-        elif self.act_layer == "swiglu":
-            gate, val = self.ffn_key(xn).chunk(2, dim=-1)
-            k = F.silu(gate) * val
-        else:
-            raise ValueError(f"Unknown activation layer: {self.act_layer}")
+        k = apply_activation(xn, self.act_layer, self.ffn_key)
         k = self.ffn_dropout(k)
         out = self.ffn_value(k)
         out = self.ffn_ln(out)
@@ -246,15 +237,13 @@ class GNNBlock(nn.Module):
     def _apply_attnres_gate(
         self, partial: Tensor, h_attn: Tensor
     ) -> Tensor:
-        if self.attnres_gate_type == "sigmoid_scalar":
-            gate = torch.sigmoid(self.attn_res_gate_logit)
-            return (1 - gate) * partial + gate * h_attn
-        elif self.attnres_gate_type == "sigmoid_vector":
-            gate = torch.sigmoid(self.attn_res_gate_proj(partial))
-            return (1 - gate) * partial + gate * h_attn
-        elif self.attnres_gate_type == "learnable_alpha":
-            return (1 - self.attn_res_alpha) * partial + self.attn_res_alpha * h_attn
-        return h_attn
+        from spixrwkv7.models.common import apply_attnres_gate
+        return apply_attnres_gate(
+            partial, h_attn, self.attnres_gate_type,
+            gate_logit=getattr(self, "attn_res_gate_logit", None),
+            gate_proj=getattr(self, "attn_res_gate_proj", None),
+            alpha=getattr(self, "attn_res_alpha", None),
+        )
 
     def forward(
         self,
@@ -387,14 +376,8 @@ class GNNVision(nn.Module):
         # Public alias expected by benchmark scripts (tokenizer access).
         self.patch_embed = self.tokenizer.patch_embed
 
-        if with_cls_token:
-            self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dims))
-
-        self.register_tokens = register_tokens
-        if register_tokens > 0:
-            self.reg_token = nn.Parameter(torch.zeros(1, register_tokens, embed_dims))
-        else:
-            self.reg_token = None
+        from spixrwkv7.models.common import init_backbone_tokens
+        init_backbone_tokens(self, with_cls_token, register_tokens, embed_dims)
 
         self.blocks = self._make_blocks(
             embed_dims,
@@ -420,15 +403,8 @@ class GNNVision(nn.Module):
         if final_norm:
             self.ln1 = get_norm_layer(norm_layer)(embed_dims)
 
-        indices: list[int] = (
-            [out_indices] if isinstance(out_indices, int) else list(out_indices)
-        )
-        for i, idx in enumerate(indices):
-            if idx < 0:
-                indices[i] = depth + idx
-        self.out_indices = sorted(set(i for i in indices if 0 <= i < depth)) or [
-            depth - 1
-        ]
+        from spixrwkv7.models.common import normalize_out_indices
+        self.out_indices = normalize_out_indices(out_indices, depth)
 
         self._init_weights()
 
@@ -462,11 +438,8 @@ class GNNVision(nn.Module):
         )
 
     def _init_weights(self):
-        with torch.no_grad():
-            if self.with_cls_token:
-                self.cls_token.zero_()
-            if self.reg_token is not None:
-                self.reg_token.zero_()
+        from spixrwkv7.models.common import zero_init_backbone_tokens
+        zero_init_backbone_tokens(self)
 
     # ------------------------------------------------------------------
     # Edge construction from batched KNN neighbour indices

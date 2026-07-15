@@ -16,8 +16,13 @@ import torch.nn.functional as F
 from spixrwkv7.kernels.rwkv7_kernel import rwkv7_recurrent_scan as _cpp_recurrent_scan
 from spixrwkv7.layers.drop import DropPath
 from spixrwkv7.layers.graph import HEAD_SIZE, q_shift_graph_multihead
+from spixrwkv7.models.common import (
+    DynamicOffset,
+    apply_attnres_gate,
+    compute_attnres_config,
+    init_attnres_params,
+)
 from spixrwkv7.models.spixrwkv7 import (
-    TIME_MIX_EXTRA_DIM,
     ChannelMix,
     RecurrentScan,
     block_attn_res,
@@ -505,19 +510,20 @@ class OptimizedVision_RWKV7_Block(nn.Module):
         self._init_weights()
 
     def _apply_gate(self, partial_block: torch.Tensor, h_attn: torch.Tensor, sublayer: str) -> torch.Tensor:
-        if self.attnres_gate_type == "sigmoid_scalar":
-            logit = self.attn_res_gate_logit if sublayer == "attn" else self.mlp_res_gate_logit
-            gate = torch.sigmoid(logit)
-            return (1 - gate) * partial_block + gate * h_attn
-        elif self.attnres_gate_type == "sigmoid_vector":
-            gate_proj = self.attn_res_gate_proj if sublayer == "attn" else self.mlp_res_gate_proj
-            gate = torch.sigmoid(gate_proj(partial_block))
-            return (1 - gate) * partial_block + gate * h_attn
-        elif self.attnres_gate_type == "learnable_alpha":
-            alpha = self.attn_res_alpha if sublayer == "attn" else self.mlp_res_alpha
-            return (1 - alpha) * partial_block + alpha * h_attn
+        if sublayer == "attn":
+            return apply_attnres_gate(
+                partial_block, h_attn, self.attnres_gate_type,
+                gate_logit=getattr(self, "attn_res_gate_logit", None),
+                gate_proj=getattr(self, "attn_res_gate_proj", None),
+                alpha=getattr(self, "attn_res_alpha", None),
+            )
         else:
-            return h_attn
+            return apply_attnres_gate(
+                partial_block, h_attn, self.attnres_gate_type,
+                gate_logit=getattr(self, "mlp_res_gate_logit", None),
+                gate_proj=getattr(self, "mlp_res_gate_proj", None),
+                alpha=getattr(self, "mlp_res_alpha", None),
+            )
 
     def _init_weights(self):
         with torch.no_grad():
@@ -534,13 +540,7 @@ class OptimizedVision_RWKV7_Block(nn.Module):
             self.spatial_mixer.scan.init_weights(ratio_0_to_1, ratio_1_to_almost0, ddd)
 
             if self.use_attnres:
-                nn.init.zeros_(self.attn_res_proj.weight)
-                nn.init.zeros_(self.mlp_res_proj.weight)
-                if self.attnres_gate_type == "sigmoid_vector":
-                    nn.init.zeros_(self.attn_res_gate_proj.weight)
-                    nn.init.constant_(self.attn_res_gate_proj.bias, -2.0)
-                    nn.init.zeros_(self.mlp_res_gate_proj.weight)
-                    nn.init.constant_(self.mlp_res_gate_proj.bias, -2.0)
+                init_attnres_params(self, self.attnres_gate_type, self.n_embd)
 
     def forward(
         self,
@@ -625,7 +625,7 @@ class OptimizedSpatialMixer(nn.Module):
         self.layer_id = layer_id
         self.n_layer = n_layer
 
-        self.dynamic_offset = _DynamicOffset(n_embd)
+        self.dynamic_offset = DynamicOffset(n_embd)
         if use_parallel:
             self.scan = ParallelRecurrentScan(n_embd, n_head, layer_id, n_layer)
         elif use_cpp:
@@ -680,30 +680,3 @@ class OptimizedSpatialMixer(nn.Module):
             att_out = self.gamma1 * att_out
         x = x + self.drop_path(att_out)
         return x, vf_fwd, vf_bwd
-
-
-class _DynamicOffset(nn.Module):
-    """Input-dependent dynamic offset computation for time-mixing."""
-
-    def __init__(self, n_embd: int):
-        super().__init__()
-        self.time_maa_x = nn.Parameter(torch.zeros(1, 1, n_embd))
-        self.time_maa_w1 = nn.Parameter(torch.zeros(n_embd, TIME_MIX_EXTRA_DIM * 6))
-        self.time_maa_w2 = nn.Parameter(torch.zeros(6, TIME_MIX_EXTRA_DIM, n_embd))
-
-    def forward(self, xn: torch.Tensor, xx: torch.Tensor) -> torch.Tensor:
-        B, N, D = xn.shape
-        x_base = xn + xx * self.time_maa_x
-        x_dyn = torch.tanh(x_base @ self.time_maa_w1)
-        x_dyn = x_dyn.view(B * N, 6, -1).transpose(0, 1)
-        x_dyn = torch.bmm(x_dyn, self.time_maa_w2)
-        dm = x_dyn.view(6, B, N, D)
-        return dm
-
-    def init_weights(self, ratio_1_to_almost0: float, ddd: torch.Tensor):
-        with torch.no_grad():
-            def fancy_mix(base_pow):
-                return 1.0 - torch.pow(ddd, base_pow)
-            self.time_maa_x.copy_(fancy_mix(ratio_1_to_almost0))
-            self.time_maa_w1.uniform_(-1e-4, 1e-4)
-            self.time_maa_w2.uniform_(-1e-4, 1e-4)

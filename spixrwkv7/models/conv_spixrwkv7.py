@@ -674,14 +674,8 @@ class ConvolutionalVision_RWKV7(nn.Module):
         )
         self.patch_embed = self.tokenizer.patch_embed
 
-        if with_cls_token:
-            self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dims))
-
-        self.register_tokens = register_tokens
-        if register_tokens > 0:
-            self.reg_token = nn.Parameter(torch.zeros(1, register_tokens, embed_dims))
-        else:
-            self.reg_token = None
+        from spixrwkv7.models.common import init_backbone_tokens
+        init_backbone_tokens(self, with_cls_token, register_tokens, embed_dims)
 
         self.blocks = self._make_blocks(
             embed_dims=embed_dims,
@@ -700,15 +694,8 @@ class ConvolutionalVision_RWKV7(nn.Module):
         if final_norm:
             self.ln1 = get_norm_layer(norm_layer)(embed_dims)
 
-        indices: list[int] = (
-            [out_indices] if isinstance(out_indices, int) else list(out_indices)
-        )
-        for i, idx in enumerate(indices):
-            if idx < 0:
-                indices[i] = depth + idx
-        self.out_indices = sorted(set(i for i in indices if 0 <= i < depth)) or [
-            depth - 1
-        ]
+        from spixrwkv7.models.common import normalize_out_indices
+        self.out_indices = normalize_out_indices(out_indices, depth)
 
         self._init_weights()
 
@@ -754,11 +741,8 @@ class ConvolutionalVision_RWKV7(nn.Module):
         )
 
     def _init_weights(self):
-        with torch.no_grad():
-            if self.with_cls_token:
-                self.cls_token.zero_()
-            if self.reg_token is not None:
-                self.reg_token.zero_()
+        from spixrwkv7.models.common import zero_init_backbone_tokens
+        zero_init_backbone_tokens(self)
 
     # ------------------------------------------------------------------
     # _project_output

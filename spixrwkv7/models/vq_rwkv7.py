@@ -556,16 +556,8 @@ class VQ_RWKV7(nn.Module):
         )
 
         # ---- CLS / Register tokens ----
-        if with_cls_token:
-            self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dims))
-
-        self.register_tokens = register_tokens
-        if register_tokens > 0:
-            self.reg_token = nn.Parameter(
-                torch.zeros(1, register_tokens, embed_dims)
-            )
-        else:
-            self.reg_token = None
+        from spixrwkv7.models.common import init_backbone_tokens
+        init_backbone_tokens(self, with_cls_token, register_tokens, embed_dims)
 
         # ---- RWKV-7 Blocks ----
         self.blocks = self._make_blocks(
@@ -593,13 +585,8 @@ class VQ_RWKV7(nn.Module):
         # ---- Output indices ----
         if isinstance(out_indices, int):
             out_indices = [out_indices]
-        indices = list(out_indices)
-        for i, idx in enumerate(indices):
-            if idx < 0:
-                indices[i] = depth + idx
-        self.out_indices = sorted(
-            set(i for i in indices if 0 <= i < depth)
-        ) or [depth - 1]
+        from spixrwkv7.models.common import normalize_out_indices
+        self.out_indices = normalize_out_indices(out_indices, depth)
 
         # ---- AttnRes ----
         self.use_attnres = use_attnres
@@ -656,11 +643,8 @@ class VQ_RWKV7(nn.Module):
     # ------------------------------------------------------------------
 
     def _init_weights(self):
-        with torch.no_grad():
-            if self.with_cls_token:
-                self.cls_token.zero_()
-            if self.reg_token is not None:
-                self.reg_token.zero_()
+        from spixrwkv7.models.common import zero_init_backbone_tokens
+        zero_init_backbone_tokens(self)
 
     # ------------------------------------------------------------------
     # Output projection

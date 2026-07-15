@@ -12,8 +12,19 @@ from spixrwkv7.data.diff_slic import DiffSLIC, spixel_upsampling
 from spixrwkv7.data.lnsnet import LNSNet, download_lnsnet_weights, lnsnet_assignment
 from spixrwkv7.layers.drop import DropPath
 from spixrwkv7.layers.graph import HEAD_SIZE, build_knn_graph, q_shift_graph_multihead
+from spixrwkv7.models.common import (
+    TIME_MIX_EXTRA_DIM,
+    DynamicOffset,
+    apply_activation,
+    apply_attnres_gate,
+    compute_attnres_config,
+    init_attnres_params,
+    init_backbone_tokens,
+    normalize_out_indices,
+    resolve_num_heads,
+    zero_init_backbone_tokens,
+)
 
-TIME_MIX_EXTRA_DIM = 32
 _HILBERT_BITS = 13
 
 
@@ -311,41 +322,6 @@ class RecurrentScan(nn.Module):
 # =====================================================================
 
 
-class _DynamicOffset(nn.Module):
-    """Input-dependent dynamic offset computation for time-mixing."""
-
-    def __init__(self, n_embd: int):
-        super().__init__()
-        self.time_maa_x = nn.Parameter(torch.zeros(1, 1, n_embd))
-        self.time_maa_w1 = nn.Parameter(torch.zeros(n_embd, TIME_MIX_EXTRA_DIM * 6))
-        self.time_maa_w2 = nn.Parameter(torch.zeros(6, TIME_MIX_EXTRA_DIM, n_embd))
-
-    def forward(
-        self,
-        xn: torch.Tensor,
-        xx: torch.Tensor,
-    ) -> torch.Tensor:
-        """Compute input-dependent mixing offsets dm from normalized input and shift delta.
-
-        Returns dm of shape (6, B, N, D) — one offset per mixing path.
-        """
-        B, N, D = xn.shape
-        x_base = xn + xx * self.time_maa_x
-        x_dyn = torch.tanh(x_base @ self.time_maa_w1)
-        x_dyn = x_dyn.view(B * N, 6, -1).transpose(0, 1)
-        x_dyn = torch.bmm(x_dyn, self.time_maa_w2)
-        dm = x_dyn.view(6, B, N, D)
-        return dm
-
-    def init_weights(self, ratio_1_to_almost0: float, ddd: torch.Tensor):
-        with torch.no_grad():
-            def fancy_mix(base_pow):
-                return 1.0 - torch.pow(ddd, base_pow)
-            self.time_maa_x.copy_(fancy_mix(ratio_1_to_almost0))
-            self.time_maa_w1.uniform_(-1e-4, 1e-4)
-            self.time_maa_w2.uniform_(-1e-4, 1e-4)
-
-
 class SpatialMixer(nn.Module):
     """Bidirectional spatial (time) mixing with graph Q-shift and RWKV-7 recurrence.
 
@@ -377,7 +353,7 @@ class SpatialMixer(nn.Module):
         self.layer_id = layer_id
         self.n_layer = n_layer
 
-        self.dynamic_offset = _DynamicOffset(n_embd)
+        self.dynamic_offset = DynamicOffset(n_embd)
         self.scan = RecurrentScan(n_embd, n_head, layer_id, n_layer)
         self.fusion_gate = nn.Linear(n_embd, n_embd, bias=False)
         self.gate_scale = nn.Parameter(torch.tensor(0.5))
@@ -496,17 +472,7 @@ class ChannelMix(nn.Module):
         )
         xx = xs - xn
         xk = xn + xx * self.ffn_x_k
-        if self.act_layer == "relu2":
-            k = F.relu(self.ffn_key(xk)).pow(2)
-        elif self.act_layer == "gelu":
-            k = F.gelu(self.ffn_key(xk))
-        elif self.act_layer == "silu":
-            k = F.silu(self.ffn_key(xk))
-        elif self.act_layer == "swiglu":
-            gate, val = self.ffn_key(xk).chunk(2, dim=-1)
-            k = F.silu(gate) * val
-        else:
-            raise ValueError(f"Unknown activation layer: {self.act_layer}")
+        k = apply_activation(xk, self.act_layer, self.ffn_key)
         k = self.ffn_dropout(k)
         ffn_out = self.ffn_value(k)
         if self.gamma2 is not None:
@@ -646,19 +612,20 @@ class Vision_RWKV7_Block(nn.Module):
         self._init_weights()
 
     def _apply_gate(self, partial_block: torch.Tensor, h_attn: torch.Tensor, sublayer: str) -> torch.Tensor:
-        if self.attnres_gate_type == "sigmoid_scalar":
-            logit = self.attn_res_gate_logit if sublayer == "attn" else self.mlp_res_gate_logit
-            gate = torch.sigmoid(logit)
-            return (1 - gate) * partial_block + gate * h_attn
-        elif self.attnres_gate_type == "sigmoid_vector":
-            gate_proj = self.attn_res_gate_proj if sublayer == "attn" else self.mlp_res_gate_proj
-            gate = torch.sigmoid(gate_proj(partial_block))
-            return (1 - gate) * partial_block + gate * h_attn
-        elif self.attnres_gate_type == "learnable_alpha":
-            alpha = self.attn_res_alpha if sublayer == "attn" else self.mlp_res_alpha
-            return (1 - alpha) * partial_block + alpha * h_attn
+        if sublayer == "attn":
+            return apply_attnres_gate(
+                partial_block, h_attn, self.attnres_gate_type,
+                gate_logit=getattr(self, "attn_res_gate_logit", None),
+                gate_proj=getattr(self, "attn_res_gate_proj", None),
+                alpha=getattr(self, "attn_res_alpha", None),
+            )
         else:
-            return h_attn
+            return apply_attnres_gate(
+                partial_block, h_attn, self.attnres_gate_type,
+                gate_logit=getattr(self, "mlp_res_gate_logit", None),
+                gate_proj=getattr(self, "mlp_res_gate_proj", None),
+                alpha=getattr(self, "mlp_res_alpha", None),
+            )
 
     def _init_weights(self):
         with torch.no_grad():
@@ -676,13 +643,7 @@ class Vision_RWKV7_Block(nn.Module):
             self.spatial_mixer.scan.init_weights(ratio_0_to_1, ratio_1_to_almost0, ddd)
 
             if self.use_attnres:
-                nn.init.zeros_(self.attn_res_proj.weight)
-                nn.init.zeros_(self.mlp_res_proj.weight)
-                if self.attnres_gate_type == "sigmoid_vector":
-                    nn.init.zeros_(self.attn_res_gate_proj.weight)
-                    nn.init.constant_(self.attn_res_gate_proj.bias, -2.0)
-                    nn.init.zeros_(self.mlp_res_gate_proj.weight)
-                    nn.init.constant_(self.mlp_res_gate_proj.bias, -2.0)
+                init_attnres_params(self, self.attnres_gate_type, self.n_embd)
 
     def forward(
         self,
@@ -1232,15 +1193,7 @@ class Vision_RWKV7(nn.Module):
         # Keep patch_embed as a public alias for backward compat (tests access .patch_embed.mode)
         self.patch_embed = self.tokenizer.patch_embed
 
-        if with_cls_token:
-            self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dims))
-
-        # Register tokens (DINOv2-style learnable tokens prepended to sequence)
-        self.register_tokens = register_tokens
-        if register_tokens > 0:
-            self.reg_token = nn.Parameter(torch.zeros(1, register_tokens, embed_dims))
-        else:
-            self.reg_token = None
+        init_backbone_tokens(self, with_cls_token, register_tokens, embed_dims)
 
         self.blocks = self._make_blocks(
             embed_dims=embed_dims,
@@ -1259,15 +1212,7 @@ class Vision_RWKV7(nn.Module):
         if final_norm:
             self.ln1 = get_norm_layer(norm_layer)(embed_dims)
 
-        indices: list[int] = (
-            [out_indices] if isinstance(out_indices, int) else list(out_indices)
-        )
-        for i, idx in enumerate(indices):
-            if idx < 0:
-                indices[i] = depth + idx
-        self.out_indices = sorted(set(i for i in indices if 0 <= i < depth)) or [
-            depth - 1
-        ]
+        self.out_indices = normalize_out_indices(out_indices, depth)
 
         self._init_weights()
 
@@ -1309,11 +1254,7 @@ class Vision_RWKV7(nn.Module):
         )
 
     def _init_weights(self):
-        with torch.no_grad():
-            if self.with_cls_token:
-                self.cls_token.zero_()
-            if self.reg_token is not None:
-                self.reg_token.zero_()
+        zero_init_backbone_tokens(self)
 
     def _project_output(
         self,
