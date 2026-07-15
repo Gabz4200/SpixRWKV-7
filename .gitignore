@@ -97,3 +97,9 @@ checkpoints/**/*
 # Artifacts and outputs
 output.png
 *.log
+
+# Test data (top-level only, not spixrwkv7/data/)
+/data/
+
+# MiMoCode internal
+.mimocode/
