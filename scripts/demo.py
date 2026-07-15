@@ -13,13 +13,13 @@ sys.path.insert(0, str(_ROOT))
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from spixrwkv7.data.transforms import preprocess_image_for_rwkv7  # noqa: E402
+from spixrwkv7.data.image_utils import load_random_caltech101_image  # noqa: E402
 from spixrwkv7.kernels.optimized_vision import (  # noqa: E402
     create_optimized_vision_rwkv7 as _create_model,
 )
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7  # noqa: E402
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7  # noqa: E402
-from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision_rwkv7  # noqa: E402
+from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision  # noqa: E402
 
 # Inspired by: https://arxiv.org/abs/2109.08203
 # Recommended: run 5-10 seeds, report mean ± std
@@ -117,7 +117,7 @@ def main():
                 use_jit=args.use_jit,
             )
         elif args.model_type == "gnn":
-            model = create_gnn_vision_rwkv7(
+            model = create_gnn_vision(
                 img_size=args.img_size,
                 embed_dims=args.embed_dims,
                 num_heads=args.num_heads,
@@ -172,14 +172,14 @@ def main():
                 # Reset your custom RWKV parameters
                 model._init_weights()
 
-                # Dummy image input
-                x_raw = preprocess_image_for_rwkv7(
-                    "test_image_from_slirack_pinterest.jpg",
+                # Load a real image from caltech101_classification
+                x_raw, class_name, label = load_random_caltech101_image(
                     img_size=args.img_size,
-                    include_alpha=True,
+                    device=TORCH_DEVICE,
+                    seed=seed,
                 )
-                # x_raw is already (1, 6, H, W) from preprocess_image_for_rwkv7
-                x = x_raw.to(TORCH_DEVICE)
+                print(f"  Loaded image: class={class_name}, label={label}")
+                x = x_raw
 
                 # Forward pass
                 outs = callable_model(x)

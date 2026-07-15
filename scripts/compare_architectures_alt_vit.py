@@ -27,7 +27,7 @@ from einops.layers.torch import Rearrange
 
 from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
-from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision_rwkv7
+from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
 
 
@@ -162,7 +162,7 @@ class SimpleViT(nn.Module):
         return self.linear_head(x)
 
 
-def get_vit_model(size: str, img_size: int, num_classes: int = 1000):
+def get_vit_model(size: str, img_size: int, num_classes: int = 1000, channels: int = 6):
     """Get ViT model matching the size config.
 
     Maps:
@@ -182,7 +182,7 @@ def get_vit_model(size: str, img_size: int, num_classes: int = 1000):
     model = SimpleViT(
         image_size=img_size,
         patch_size=16,
-        channels=3,
+        channels=channels,
         num_classes=num_classes,
         dim=cfg["embed_dim"],
         depth=cfg["depth"],
@@ -305,9 +305,24 @@ def benchmark_rwkv_components(
     }
 
 
-def create_dummy_input(img_size: int, channels: int = 3, batch_size: int = 1) -> torch.Tensor:
-    """Create dummy input tensor."""
-    return torch.randn(batch_size, channels, img_size, img_size)
+def create_real_input(
+    img_size: int, channels: int = 6, batch_size: int = 1,
+    seed: int = 42,
+) -> torch.Tensor:
+    """Load a real image from caltech101_classification as input tensor."""
+    from spixrwkv7.data.image_utils import (
+        load_random_caltech101_image,
+        load_random_caltech101_rgb,
+    )
+    if channels == 6:
+        tensor, _, _ = load_random_caltech101_image(
+            img_size=img_size, seed=seed,
+        )
+    else:
+        tensor, _, _ = load_random_caltech101_rgb(
+            img_size=img_size, seed=seed,
+        )
+    return tensor.expand(batch_size, -1, -1, -1).clone()
 
 
 def build_rwkv(
@@ -323,6 +338,9 @@ def build_rwkv(
     depth = config["depth"]
     num_heads = config["num_heads"]
     num_superpixels = config.get("num_superpixels", 0)
+
+    # Ensure optimized C++ kernels are used where applicable
+    config = {**config, "use_cpp": True}
 
     if model_type == "vq":
         return create_vq_rwkv7(
@@ -386,7 +404,7 @@ def build_rwkv(
             use_cpp=config.get("use_cpp", False),
         )
     if model_type == "gnn":
-        return create_gnn_vision_rwkv7(
+        return create_gnn_vision(
             img_size=img_size,
             embed_dims=embed_dims,
             num_heads=num_heads,
@@ -472,8 +490,9 @@ def benchmark_variant(
     rwkv_params = count_parameters(model)
     vit_model = get_vit_model(size, img_size)
     vit_params = count_parameters(vit_model)
-    rwkv_input = create_dummy_input(img_size, channels=6, batch_size=batch_size)
-    vit_input = create_dummy_input(img_size, channels=3, batch_size=batch_size)
+    _bench_seed = hash((model_type, size)) % 10000
+    rwkv_input = create_real_input(img_size, channels=6, batch_size=batch_size, seed=_bench_seed)
+    vit_input = create_real_input(img_size, channels=6, batch_size=batch_size, seed=_bench_seed)
     rwkv_mem = get_memory_usage(model, rwkv_input)
     vit_mem = get_memory_usage(vit_model, vit_input)
     rwkv_metrics = benchmark_rwkv_components(model, rwkv_input, warmup_runs, timed_runs, device)
@@ -603,12 +622,12 @@ def run_resolution_sweep(
                 variant, size, config, img_size,
             )
 
-            rwkv_input = create_dummy_input(img_size, channels=6, batch_size=batch_size)
+            rwkv_input = create_real_input(img_size, channels=6, batch_size=batch_size, seed=img_size)
             rwkv_mem = get_memory_usage(rwkv_model, rwkv_input)
             rwkv_metrics = benchmark_rwkv_components(rwkv_model, rwkv_input, warmup_runs, timed_runs, device)
 
             vit_model = get_vit_model(size, img_size)
-            vit_input = create_dummy_input(img_size, channels=3, batch_size=batch_size)
+            vit_input = create_real_input(img_size, channels=6, batch_size=batch_size, seed=img_size)
             vit_mem = get_memory_usage(vit_model, vit_input)
             vit_metrics = benchmark_model(vit_model, vit_input, warmup_runs, timed_runs, device)
 
