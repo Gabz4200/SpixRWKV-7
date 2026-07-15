@@ -238,11 +238,11 @@ class GNNBlock(nn.Module):
 
 
 # =====================================================================
-# GNNVision_RWKV7 backbone
+# GNNVision backbone
 # =====================================================================
 
 
-class GNNVision_RWKV7(nn.Module):
+class GNNVision(nn.Module):
     """Superpixel GNN backbone: SuperpixelTokenizer -> GNN message passing.
 
     Reuses the project's superpixel tokenization (diffSLIC/LNSNet/grid) and
@@ -278,6 +278,7 @@ class GNNVision_RWKV7(nn.Module):
         gnn_conv: str = "gatv2",
         gnn_heads: int = 4,
         gnn_aggr: str = "mean",
+        jk: str = "none",
         **kwargs,
     ):
         super().__init__()
@@ -296,6 +297,7 @@ class GNNVision_RWKV7(nn.Module):
         self.gnn_conv = gnn_conv
         self.gnn_heads = gnn_heads
         self.gnn_aggr = gnn_aggr
+        self.jk = jk
 
         if num_heads is None:
             assert (
@@ -340,6 +342,17 @@ class GNNVision_RWKV7(nn.Module):
             norm_layer,
             act_layer,
         )
+
+        # Jumping Knowledge (JK) aggregation across layers.
+        # When jk="lstm", an LSTM reads the per-layer feature stack and
+        # produces a single fused representation (Xu et al., Representation
+        # Learning on Graphs with Jumping Knowledge Networks, ICML 2018).
+        if jk == "lstm":
+            self.jk_lstm = nn.LSTM(embed_dims, embed_dims, batch_first=True)
+            self.jk_proj = nn.Linear(embed_dims, embed_dims, bias=False)
+        else:
+            self.jk_lstm = None
+            self.jk_proj = None
 
         self.final_norm = final_norm
         if final_norm:
@@ -396,23 +409,57 @@ class GNNVision_RWKV7(nn.Module):
 
     @staticmethod
     def _build_edges(
-        neighbors: Tensor, neighbor_dists: Tensor
+        neighbors: Tensor,
+        neighbor_dists: Tensor,
+        num_register: int = 0,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """Convert (B, N, k) KNN neighbours into a batched PyG edge set.
 
+        When ``num_register > 0``, register nodes (first R indices per batch
+        item) are connected to ALL superpixel nodes (bipartite), while
+        superpixel nodes retain their KNN edges.  This gives each superpixel
+        node ``4 + R`` incoming edges (4 KNN neighbours + R register nodes),
+        and each register node ``N`` incoming edges (every superpixel).
+
         Returns ``(edge_index (2, E), edge_weight (E,), edge_attr (E, 1))``
-        with global node indices ``b*N + local`` so graphs for each batch
-        item stay disjoint.  Edge weights are inverse distances.
+        with global node indices ``b*(N+R) + local`` so graphs for each batch
+        item stay disjoint.  Edge weights are inverse distances (KNN) or
+        uniform 1.0 (register edges).
         """
         B, N, k = neighbors.shape
         device = neighbors.device
-        offsets = torch.arange(B, device=device).view(B, 1, 1)
-        src = (
-            offsets + torch.arange(N, device=device).view(1, N, 1)
-        ).expand(B, N, k).reshape(-1)
-        tgt = (offsets + neighbors).reshape(-1)
-        edge_index = torch.stack([src, tgt], dim=0).long()
-        edge_weight = 1.0 / (neighbor_dists.reshape(-1) + 1e-6)
+        R = num_register
+        N_total = N + R
+
+        all_src, all_tgt, all_w = [], [], []
+
+        for b in range(B):
+            base = b * N_total
+            sp_offset = base + R
+
+            # --- KNN edges for superpixel nodes (local idx R..R+N-1) ---
+            src_local = torch.arange(N, device=device).view(N, 1).expand(N, k)
+            tgt_local = neighbors[b]  # (N, k)
+            w = 1.0 / (neighbor_dists[b].reshape(-1) + 1e-6)  # (N*k,)
+
+            all_src.append((sp_offset + src_local).reshape(-1))
+            all_tgt.append((sp_offset + tgt_local).reshape(-1))
+            all_w.append(w)
+
+            # --- Register → all superpixels (bipartite, uniform weight) ---
+            if R > 0:
+                reg_idx = torch.arange(R, device=device).view(R, 1)
+                sp_idx = torch.arange(N, device=device).view(1, N)
+                reg_src = (base + reg_idx).expand(R, N).reshape(-1)
+                reg_tgt = (sp_offset + sp_idx).expand(R, N).reshape(-1)
+                all_src.append(reg_src)
+                all_tgt.append(reg_tgt)
+                all_w.append(torch.ones(R * N, device=device))
+
+        edge_index = torch.stack(
+            [torch.cat(all_src).long(), torch.cat(all_tgt).long()], dim=0
+        )
+        edge_weight = torch.cat(all_w)
         edge_attr = edge_weight.unsqueeze(-1)
         return edge_index, edge_weight, edge_attr
 
@@ -477,7 +524,7 @@ class GNNVision_RWKV7(nn.Module):
             spixel_size=self.spixel_size,
             mask=mask,
         )
-        tokens = out["tokens"]
+        tokens = out["tokens"]  # (B, N, D) — superpixel tokens only
         neighbors = out["neighbors"]
         neighbor_dists = out["neighbor_dists"]
         inv_order = out["inv_order"]
@@ -487,32 +534,51 @@ class GNNVision_RWKV7(nn.Module):
         h_s, w_s = out["h_s"], out["w_s"]
         sorted_mask = out["mask"]
 
-        if self.with_cls_token:
-            tokens = torch.cat((tokens, self.cls_token.expand(B, -1, -1)), dim=1)
+        N = tokens.shape[1]  # number of superpixel tokens
+
+        # Apply mask to superpixel tokens BEFORE prepending register tokens.
+        # sorted_mask has shape (B, N), matching tokens (B, N, D) exactly.
+        if sorted_mask is not None:
+            tokens = tokens * sorted_mask.unsqueeze(-1)
+
+        # Prepend register tokens (DINOv2-style) — they connect to ALL nodes.
         if self.register_tokens > 0:
             assert self.reg_token is not None
             tokens = torch.cat((self.reg_token.expand(B, -1, -1), tokens), dim=1)
 
+        # Build edges with register-to-all connectivity.
         edge_index, edge_weight, edge_attr = self._build_edges(
-            neighbors, neighbor_dists
+            neighbors, neighbor_dists, num_register=self.register_tokens
         )
 
-        # Optional token masking: zero masked-out superpixel features so they
-        # neither emit nor aggregate meaningful messages.
-        if sorted_mask is not None:
-            tokens = tokens * sorted_mask.unsqueeze(-1)
-
         # Flatten to global node tensor for PyG message passing.
+        # Shape: (B * (R + N), D) where R = register_tokens.
         x_nodes = tokens.reshape(B * tokens.shape[1], self.embed_dims)
 
+        # Collect per-layer features for Jumping Knowledge if enabled.
+        jk_layers: List[Tensor] = []
         outs: List[Tensor] = []
+
         for i, block in enumerate(self.blocks):
             x_nodes = block(x_nodes, edge_index, edge_weight, edge_attr)
+
+            if self.jk == "lstm":
+                jk_layers.append(x_nodes)
+
             if i == len(self.blocks) - 1 and self.final_norm:
                 x_nodes = self.ln1(x_nodes)
 
             if i in self.out_indices:
-                tokens_out = x_nodes.view(B, -1, self.embed_dims)
+                if self.jk == "lstm" and self.jk_lstm is not None:
+                    # JK-LSTM: feed all collected layers through LSTM, take last hidden.
+                    # jk_layers shape: (num_layers, B*(R+N), D) → (B*(R+N), num_layers, D)
+                    layer_stack = torch.stack(jk_layers, dim=1)
+                    lstm_out, _ = self.jk_lstm(layer_stack)
+                    x_jk = self.jk_proj(lstm_out[:, -1, :])  # last timestep
+                else:
+                    x_jk = x_nodes
+
+                tokens_out = x_jk.view(B, -1, self.embed_dims)
                 if self.with_cls_token:
                     tokens_out = tokens_out[:, :-1]
                 if self.register_tokens > 0:
@@ -538,7 +604,7 @@ class GNNVision_RWKV7(nn.Module):
 # =====================================================================
 
 
-def create_gnn_vision_rwkv7(
+def create_gnn_vision(
     img_size: int = 224,
     embed_dims: int = 192,
     num_heads: Optional[int] = None,
@@ -563,15 +629,16 @@ def create_gnn_vision_rwkv7(
     gnn_conv: str = "gatv2",
     gnn_heads: int = 4,
     gnn_aggr: str = "mean",
+    jk: str = "none",
     use_jit: bool = False,
 ) -> torch.nn.Module:
-    """Create a :class:`GNNVision_RWKV7` ablation model (6-channel input).
+    """Create a :class:`GNNVision` model (6-channel input).
 
     Mirrors :func:`create_vision_rwkv7`'s contract so the two backbones are
     drop-in comparable, with three GNN-specific additions
-    (``gnn_conv``, ``gnn_heads``, ``gnn_aggr``).
+    (``gnn_conv``, ``gnn_heads``, ``gnn_aggr``, ``jk``).
     """
-    _model: torch.nn.Module = GNNVision_RWKV7(
+    _model: torch.nn.Module = GNNVision(
         img_size=img_size,
         in_chans=6,
         embed_dims=embed_dims,
@@ -597,5 +664,6 @@ def create_gnn_vision_rwkv7(
         gnn_conv=gnn_conv,
         gnn_heads=gnn_heads,
         gnn_aggr=gnn_aggr,
+        jk=jk,
     )
     return maybe_compile(_model, use_jit=use_jit)

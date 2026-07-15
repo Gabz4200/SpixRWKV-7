@@ -26,8 +26,8 @@ from spixrwkv7.models.conv_spixrwkv7 import (
     create_conv_vision_rwkv7,
 )
 from spixrwkv7.models.gnn_spixrwkv7 import (
-    GNNVision_RWKV7,
-    create_gnn_vision_rwkv7,
+    GNNVision,
+    create_gnn_vision,
 )
 from spixrwkv7.models.vq_rwkv7 import (
     VQ_RWKV7,
@@ -53,8 +53,8 @@ __all__ = [
     "create_optimized_vision_rwkv7",
     "ConvolutionalVision_RWKV7",
     "create_conv_vision_rwkv7",
-    "GNNVision_RWKV7",
-    "create_gnn_vision_rwkv7",
+    "GNNVision",
+    "create_gnn_vision",
     "create_vq_rwkv7",
     "create_vision_rwkv7",
     "drop_path",
