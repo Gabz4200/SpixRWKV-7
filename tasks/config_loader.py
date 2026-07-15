@@ -21,7 +21,7 @@ import yaml
 
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
-from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision_rwkv7
+from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "configs" / "model"
 
@@ -151,7 +151,7 @@ def build_backbone(
         )
 
     if model_type == "gnn":
-        return create_gnn_vision_rwkv7(
+        return create_gnn_vision(
             img_size=img,
             embed_dims=config["embed_dims"],
             num_heads=config["num_heads"],

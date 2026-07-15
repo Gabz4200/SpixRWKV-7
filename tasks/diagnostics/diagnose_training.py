@@ -26,16 +26,22 @@ from spixrwkv7.kernels.optimized_vision import (  # noqa: E402
 )
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7  # noqa: E402
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7  # noqa: E402
-from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision_rwkv7  # noqa: E402
+from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision  # noqa: E402
 
 # Global image size override (set from CLI --img-size)
 _IMG_SIZE: int = 512
 
 
 def synth_batch(batch_size, num_classes, img_size, device):
-    x = torch.randn(batch_size, 6, img_size, img_size, device=device)
-    y = torch.randint(0, num_classes, (batch_size,), device=device)
-    return x, y
+    """Load a batch of real images from caltech101_classification."""
+    from spixrwkv7.data.image_utils import load_random_caltech101_batch
+    return load_random_caltech101_batch(
+        batch_size=batch_size,
+        img_size=img_size,
+        num_classes=num_classes,
+        device=device,
+        seed=42,
+    )
 
 
 def build_model(depth, embed_dims, num_heads, num_superpixels, device,
@@ -89,7 +95,7 @@ def build_model(depth, embed_dims, num_heads, num_superpixels, device,
         ).to(device)
         backbone._init_weights()
     elif model_type == "gnn":
-        backbone = create_gnn_vision_rwkv7(
+        backbone = create_gnn_vision(
             img_size=img_size,
             embed_dims=embed_dims,
             num_heads=num_heads,

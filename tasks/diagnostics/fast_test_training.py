@@ -30,7 +30,7 @@ from spixrwkv7 import ClassificationHead
 from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as _create_model
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
-from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision_rwkv7
+from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision
 
 # ---------------------------------------------------------------------------
 # Default hyper-parameters (tuned for single-batch overfit)
@@ -59,10 +59,15 @@ def synth_batch(
     img_size: int,
     device: torch.device,
 ) -> tuple[Tensor, Tensor]:
-    """Create a batch of synthetic 6-channel images with random labels."""
-    x = torch.randn(batch_size, 6, img_size, img_size, device=device)
-    y = torch.randint(0, num_classes, (batch_size,), device=device)
-    return x, y
+    """Load a batch of real images from caltech101_classification."""
+    from spixrwkv7.data.image_utils import load_random_caltech101_batch
+    return load_random_caltech101_batch(
+        batch_size=batch_size,
+        img_size=img_size,
+        num_classes=num_classes,
+        device=device,
+        seed=42,
+    )
 
 
 def accuracy(logits: Tensor, targets: Tensor) -> float:
@@ -191,7 +196,7 @@ def main() -> None:
             ).to(device)
             backbone._init_weights()
         elif args.model_type == "gnn":
-            backbone = create_gnn_vision_rwkv7(
+            backbone = create_gnn_vision(
                 img_size=args.img_size,
                 embed_dims=args.embed_dims,
                 num_heads=args.num_heads,
