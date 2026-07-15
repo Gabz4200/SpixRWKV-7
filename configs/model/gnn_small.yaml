@@ -1,20 +1,19 @@
 # GNN (Graph Neural Network) ablation — small
-# Mirrors small.yaml but replaces the RWKV-7 recurrence with a stack of
-# PyTorch-Geometric message-passing layers over the superpixel KNN graph.
-# 1024px input, df=16 (cheap segmentation, fast convergence). The GNN still sees
-# only 144 superpixel tokens, so backbone FLOPS are img_size-independent.
+# Matched to ViT-Small parameter count (~21.8M) for fair architecture comparison.
+# GATv2 message passing over superpixel KNN graph replaces RWKV-7 recurrence.
+# 1024px input, df=16 (cheap segmentation, fast convergence).
 model:
   img_size: 1024
-  embed_dims: 256
-  num_heads: 4
-  depth: 6
+  embed_dims: 320
+  num_heads: 5
+  depth: 15
   drop_path_rate: 0.1
   init_values: 1.0e-5
   final_norm: true
   out_indices: [-1]
   with_cls_token: false
   output_cls_token: false
-  register_tokens: 0
+  register_tokens: 4
   scatter_output: true
   num_superpixels: 144
   spixel_size: null

@@ -1,13 +1,11 @@
-# Small model config (~18M params, depth=6, 144 superpixels)
-# Baseline for representation learning. A large 1024px input lifts embedding
-# detail well past ViT's 224 while the backbone still sees only 144 tokens
-# (backbone FLOPS are superpixel-bound, not resolution-bound). df=16 keeps the
-# segmentation grid bounded (~64 cells/side) and cheap.
+# Small model config (~21.7M params, depth=11, 144 superpixels)
+# Matched to ViT-Small parameter count for fair architecture comparison.
+# The backbone processes 144 superpixel tokens regardless of img_size.
 model:
   img_size: 1024
-  embed_dims: 256
-  num_heads: 4
-  depth: 6
+  embed_dims: 320
+  num_heads: 5
+  depth: 11
   drop_path_rate: 0.1
   init_values: 1.0e-5
   final_norm: true

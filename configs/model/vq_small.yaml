@@ -1,11 +1,10 @@
-# VQ Small model config (~17M params, depth=6, 512 codebook, df=16)
-# Compared to spix small: same embed_dims/heads/depth lattice, but token count
-# higher (grid size 36x36 = 1296 @16df). No superpixels/spix major differences.
-
+# VQ Small model config (~22.0M params, depth=6, 1024 codebook, df=16)
+# Matched to ViT-Small parameter count for fair architecture comparison.
+# VQ-VAE tokenizer adds ~4M params (encoder + decoder + codebook).
 model:
   img_size: 1024
-  embed_dims: 256
-  num_heads: 4
+  embed_dims: 320
+  num_heads: 5
   depth: 6
   drop_path_rate: 0.0
   init_values: 0.0

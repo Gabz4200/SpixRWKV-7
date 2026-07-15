@@ -1,12 +1,12 @@
-# Conv-Stem Small model config (~19M params, depth=6, 144 superpixels)
+# Conv-Stem Small model config (~21.7M params, depth=16, 144 superpixels)
+# Matched to ViT-Small parameter count for fair architecture comparison.
 # Conv stem: 6→64→128→256, 4x reduction (strides 1,2,2).
-# Baseline for meaningful representation learning. 1024px input lifts embedding
-# detail while the backbone sees only 144 tokens.
+# Much deeper than spix to compensate for smaller embed_dims.
 model:
   img_size: 1024
   embed_dims: 256
   num_heads: 4
-  depth: 6
+  depth: 16
   drop_path_rate: 0.1
   init_values: 1.0e-5
   final_norm: true
