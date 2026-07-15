@@ -413,8 +413,11 @@ class ConvolutionalSuperpixelTokenizer(nn.Module):
         global_labels: Optional[torch.Tensor] = None
 
         if self.spixel_backend == "diff_slic":
+            compactness = self.compactness
+            if self.training:
+                compactness = compactness * (0.5 + torch.rand(1).item() * 1.5)
             x_for_slic = torch.cat(
-                [x_raw_down[:, :-2], x_raw_down[:, -2:] * self.compactness], dim=1
+                [x_raw_down[:, :-2], x_raw_down[:, -2:] * compactness], dim=1
             )
             assert self.diff_slic is not None
             clst_feats, p2s_assign, _ = self.diff_slic(x_for_slic, n_spixels=n_sp)
@@ -604,7 +607,7 @@ class ConvolutionalVision_RWKV7(nn.Module):
         conv_stem_channels: Tuple[int, ...] = (32, 64, 128),
         conv_stem_kernel_sizes: Tuple[int, ...] = (3, 5, 5),
         conv_stem_strides: Tuple[int, ...] = (1, 2, 2),
-        conv_stem_norm: str = "batchnorm2d",
+    conv_stem_norm: str = "layernorm",
         conv_post_norm: str = "layernorm",
         **kwargs,
     ):
@@ -984,7 +987,7 @@ def create_conv_vision_rwkv7(
     conv_stem_channels: Tuple[int, ...] = (32, 64, 128),
     conv_stem_kernel_sizes: Tuple[int, ...] = (3, 5, 5),
     conv_stem_strides: Tuple[int, ...] = (1, 2, 2),
-    conv_stem_norm: str = "batchnorm2d",
+    conv_stem_norm: str = "layernorm",
     conv_post_norm: str = "layernorm",
 ) -> torch.nn.Module:
     """Create a ConvolutionalVision_RWKV7 model with 6-channel input.

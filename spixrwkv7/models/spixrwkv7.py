@@ -127,7 +127,7 @@ class RecurrentScan(nn.Module):
     (k_k, k_a), bonus receptance (r_k), linear projections, and group norm.
     """
 
-    def __init__(self, n_embd: int, n_head: int, layer_id: int, n_layer: int, use_cpp: bool = False):
+    def __init__(self, n_embd: int, n_head: int, layer_id: int, n_layer: int, use_cpp: bool = False, drop_prob: float = 0.0):
         super().__init__()
         self.layer_id = layer_id
         self.n_layer = n_layer
@@ -135,6 +135,7 @@ class RecurrentScan(nn.Module):
         self.n_head = n_head
         self.head_size = HEAD_SIZE
         self.use_cpp = use_cpp
+        self.drop = nn.Dropout(drop_prob) if drop_prob > 0.0 else nn.Identity()
         assert self.head_size * n_head == n_embd
 
         # Head-variant parameters
@@ -343,6 +344,8 @@ class RecurrentScan(nn.Module):
 
             out = torch.stack(outputs, dim=1)
 
+        out = self.drop(out)
+
         if rev:
             out = torch.flip(out, dims=[1])
 
@@ -439,7 +442,7 @@ class SpatialMixer(nn.Module):
         self.n_layer = n_layer
 
         self.dynamic_offset = DynamicOffset(n_embd)
-        self.scan = RecurrentScan(n_embd, n_head, layer_id, n_layer, use_cpp=use_cpp)
+        self.scan = RecurrentScan(n_embd, n_head, layer_id, n_layer, use_cpp=use_cpp, drop_prob=drop_prob)
         self.fusion_gate = nn.Linear(n_embd, n_embd, bias=False)
         self.gate_scale = nn.Parameter(torch.tensor(0.5))
         self.att_ln = get_norm_layer(norm_layer)(n_embd)
@@ -1050,7 +1053,10 @@ class SuperpixelTokenizer(nn.Module):
         global_labels: Optional[torch.Tensor] = None
 
         if self.spixel_backend == "diff_slic":
-            x_for_slic = torch.cat([x_slic[:, :-2], x_slic[:, -2:] * self.compactness], dim=1)
+            compactness = self.compactness
+            if self.training:
+                compactness = compactness * (0.5 + torch.rand(1).item() * 1.5)
+            x_for_slic = torch.cat([x_slic[:, :-2], x_slic[:, -2:] * compactness], dim=1)
             assert self.diff_slic is not None
             clst_feats, p2s_assign, _ = self.diff_slic(x_for_slic, n_spixels=n_sp)
             h_s, w_s = clst_feats.shape[-2:]
