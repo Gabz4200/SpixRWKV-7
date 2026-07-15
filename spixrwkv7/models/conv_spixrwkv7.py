@@ -735,6 +735,7 @@ class ConvolutionalVision_RWKV7(nn.Module):
                     attnres_num_blocks=self.attnres_num_blocks,
                     attnres_recency_bias_init=self.attnres_recency_bias_init,
                     num_prepend_tokens=self.register_tokens,
+                    use_cpp=use_cpp,
                 )
                 for i in range(depth)
             ]

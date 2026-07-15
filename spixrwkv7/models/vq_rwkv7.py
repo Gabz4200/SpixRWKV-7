@@ -522,6 +522,7 @@ class VQ_RWKV7(nn.Module):
         attnres_num_blocks: int = 8,
         attnres_recency_bias_init: float = 10.0,
         knn_k: int = 4,
+        use_cpp: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -574,6 +575,7 @@ class VQ_RWKV7(nn.Module):
             attnres_gate_type=attnres_gate_type,
             attnres_num_blocks=attnres_num_blocks,
             attnres_recency_bias_init=attnres_recency_bias_init,
+            use_cpp=use_cpp,
             **kwargs,
         )
 
@@ -614,6 +616,7 @@ class VQ_RWKV7(nn.Module):
         attnres_gate_type: str,
         attnres_num_blocks: int,
         attnres_recency_bias_init: float,
+        use_cpp: bool = False,
         **kwargs,
     ) -> nn.ModuleList:
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
@@ -634,6 +637,7 @@ class VQ_RWKV7(nn.Module):
                 attnres_num_blocks=attnres_num_blocks,
                 attnres_recency_bias_init=attnres_recency_bias_init,
                 num_prepend_tokens=self.register_tokens,
+                use_cpp=use_cpp,
             )
             for i in range(depth)
         ])
@@ -802,14 +806,10 @@ def create_vq_rwkv7(
     attnres_num_blocks: int = 8,
     attnres_recency_bias_init: float = 10.0,
     knn_k: int = 4,
+    use_cpp: bool = False,
     use_jit: bool = False,
 ) -> torch.nn.Module:
-    """Create a VQ_RWKV7 model enforced to 6-channel input.
-
-    This is the standard entry point for this backbone.  ``in_chans=6``
-    is enforced here; the class itself accepts arbitrary ``in_chans``
-    for flexibility.
-    """
+    """Create a VQ_RWKV7 model enforced to 6-channel input."""
     from spixrwkv7.jit import maybe_compile
 
     _model: torch.nn.Module = VQ_RWKV7(
@@ -840,5 +840,6 @@ def create_vq_rwkv7(
         attnres_num_blocks=attnres_num_blocks,
         attnres_recency_bias_init=attnres_recency_bias_init,
         knn_k=knn_k,
+        use_cpp=use_cpp,
     )
     return maybe_compile(_model, use_jit=use_jit)

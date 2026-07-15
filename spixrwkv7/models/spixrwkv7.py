@@ -127,13 +127,14 @@ class RecurrentScan(nn.Module):
     (k_k, k_a), bonus receptance (r_k), linear projections, and group norm.
     """
 
-    def __init__(self, n_embd: int, n_head: int, layer_id: int, n_layer: int):
+    def __init__(self, n_embd: int, n_head: int, layer_id: int, n_layer: int, use_cpp: bool = False):
         super().__init__()
         self.layer_id = layer_id
         self.n_layer = n_layer
         self.n_embd = n_embd
         self.n_head = n_head
         self.head_size = HEAD_SIZE
+        self.use_cpp = use_cpp
         assert self.head_size * n_head == n_embd
 
         # Head-variant parameters
@@ -200,65 +201,148 @@ class RecurrentScan(nn.Module):
         ]
         x0, x1, x2, x3, x4, x5 = self.x.unbind(dim=0)
 
-        outputs, v_first_list = [], []
-        for t in range(N):
-            mask_t = mask_seq[:, t, None, None] if mask_seq is not None else 1.0
-            token, xx_t = xn_seq[:, t, :], xx_seq[:, t, :]
-            dm_t = dm_seq[:, :, t, :]
-            dmw, dmk, dmv, dmr, dmg, dma = dm_t.unbind(dim=0)
+        if self.use_cpp:
+            r_all = torch.empty(B, N, Hd, S, device=dev)
+            v_all = torch.empty(B, N, Hd, S, device=dev)
+            w_all = torch.empty(B, N, Hd, S, device=dev)
+            a_all = torch.empty(B, N, Hd, S, device=dev)
+            kk_all = torch.empty(B, N, Hd, S, device=dev)
+            kt_all = torch.empty(B, N, Hd, S, device=dev)
+            g_list = []
+            v_first_list = []
 
-            sx = state_time - token
-            state_time.copy_(token)
+            for t in range(N):
+                token, xx_t = xn_seq[:, t, :], xx_seq[:, t, :]
+                dm_t = dm_seq[:, :, t, :]
+                dmw, dmk, dmv, dmr, dmg, dma = dm_t.unbind(dim=0)
 
-            xw = token + sx * x0 + xx_t * (sw + dmw)
-            xk = token + sx * x1 + xx_t * (sk + dmk)
-            xv = token + sx * x2 + xx_t * (sv + dmv)
-            xr = token + sx * x3 + xx_t * (sr + dmr)
-            xg_in = token + sx * x4 + xx_t * (sg + dmg)
-            xa_in = token + sx * x5 + xx_t * (sa + dma)
+                sx = state_time - token
+                state_time.copy_(token)
 
-            w_raw = self.w0 + torch.tanh(xw @ self.w1) @ self.w2
-            w = torch.exp(-0.606531 * torch.sigmoid(w_raw.float()))
-            if mask_seq is not None:
-                w = torch.where(mask_seq[:, t, None] == 0, torch.ones_like(w), w)
+                xw = token + sx * x0 + xx_t * (sw + dmw)
+                xk = token + sx * x1 + xx_t * (sk + dmk)
+                xv = token + sx * x2 + xx_t * (sv + dmv)
+                xr = token + sx * x3 + xx_t * (sr + dmr)
+                xg_in = token + sx * x4 + xx_t * (sg + dmg)
+                xa_in = token + sx * x5 + xx_t * (sa + dma)
 
-            r, k, v = self.att_receptance(xr), self.att_key(xk), self.att_value(xv)
+                w_raw = self.w0 + torch.tanh(xw @ self.w1) @ self.w2
+                w_t = torch.exp(-0.606531 * torch.sigmoid(w_raw.float()))
+                if mask_seq is not None:
+                    w_t = torch.where(mask_seq[:, t, None] == 0, torch.ones_like(w_t), w_t)
 
-            if self.layer_id == 0:
-                vf = v
-                v_first_list.append(vf)
-            else:
-                vf = vf_seq[:, t, :] if vf_seq is not None else v
-                vr = self.v0 + (xv @ self.v1) @ self.v2
-                v = vf + (v - vf) * torch.sigmoid(vr)
+                r_t = self.att_receptance(xr)
+                k_t = self.att_key(xk)
+                v_t = self.att_value(xv)
 
-            a_out = torch.sigmoid(self.a0 + (xa_in @ self.a1) @ self.a2)
-            g = torch.sigmoid(xg_in @ self.g1) @ self.g2
+                if self.layer_id == 0:
+                    v_first_list.append(v_t)
+                else:
+                    vf_t = vf_seq[:, t, :] if vf_seq is not None else v_t
+                    vr = self.v0 + (xv @ self.v1) @ self.v2
+                    v_t = vf_t + (v_t - vf_t) * torch.sigmoid(vr)
 
-            kk = F.normalize((k * self.k_k).view(B, Hd, S), dim=-1, p=2.0).view(B, -1)
-            kt = k * (1 + (a_out - 1) * self.k_a)
+                a_t = torch.sigmoid(self.a0 + (xa_in @ self.a1) @ self.a2)
+                g_t = torch.sigmoid(xg_in @ self.g1) @ self.g2
 
-            vk = v.view(B, Hd, S, 1) @ kt.view(B, Hd, 1, S)
-            ab = (-kk).view(B, Hd, S, 1) @ (kk * a_out).view(B, Hd, 1, S)
-            state = state * w.view(B, Hd, 1, S) + (state @ ab.float() + vk.float()) * mask_t
+                kk_t = F.normalize(
+                    (k_t * self.k_k).view(B, Hd, S), dim=-1, p=2.0
+                ).view(B, D)
+                kt_t = k_t * (1 + (a_t - 1) * self.k_a)
 
-            r_h = r.view(B, Hd, S).unsqueeze(-1)
-            out = (state @ r_h).squeeze(-1)
-            out = self.att_group_norm(out.flatten(start_dim=1))
+                r_all[:, t] = r_t.view(B, Hd, S)
+                v_all[:, t] = v_t.view(B, Hd, S)
+                w_all[:, t] = w_t.view(B, Hd, S)
+                a_all[:, t] = a_t.view(B, Hd, S)
+                kk_all[:, t] = kk_t.view(B, Hd, S)
+                kt_all[:, t] = kt_t.view(B, Hd, S)
+                g_list.append(g_t)
 
-            # BONUS TERM: Uses kt (replacement key) per RWKV-7 Eq. 20
-            bonus = (
-                (r.view(B, Hd, S) * kt.view(B, Hd, S) * self.r_k.view(Hd, S)).sum(
-                    dim=-1, keepdim=True
-                )
-                * v.view(B, Hd, S)
-            ).view(B, D)
-            out = self.att_output((out + bonus) * g)
-            if mask_seq is not None:
-                out = out * mask_seq[:, t, None]
-            outputs.append(out)
+            out_scan = torch.ops.spixrwkv7.rwkv7_recurrent_scan(
+                state, r_all, v_all, w_all, a_all, kk_all, kt_all,
+            )
 
-        out = torch.stack(outputs, dim=1)
+            outputs = []
+            for t in range(N):
+                raw = out_scan[:, t]
+                r_t = r_all[:, t]
+                kt_t = kt_all[:, t]
+                v_t = v_all[:, t]
+                g_t = g_list[t]
+
+                out = raw.view(B, D) if raw.shape[-1] == S else raw
+                out = self.att_group_norm(out)
+
+                bonus_scalar = (r_t * kt_t * self.r_k.unsqueeze(0)).sum(dim=-1, keepdim=True)
+                bonus = (bonus_scalar * v_t).reshape(B, D)
+                out = out + bonus
+
+                out = self.att_output(out * g_t)
+                if mask_seq is not None:
+                    out = out * mask_seq[:, t, None]
+                outputs.append(out)
+
+            out = torch.stack(outputs, dim=1)
+        else:
+            outputs, v_first_list = [], []
+            for t in range(N):
+                mask_t = mask_seq[:, t, None, None] if mask_seq is not None else 1.0
+                token, xx_t = xn_seq[:, t, :], xx_seq[:, t, :]
+                dm_t = dm_seq[:, :, t, :]
+                dmw, dmk, dmv, dmr, dmg, dma = dm_t.unbind(dim=0)
+
+                sx = state_time - token
+                state_time.copy_(token)
+
+                xw = token + sx * x0 + xx_t * (sw + dmw)
+                xk = token + sx * x1 + xx_t * (sk + dmk)
+                xv = token + sx * x2 + xx_t * (sv + dmv)
+                xr = token + sx * x3 + xx_t * (sr + dmr)
+                xg_in = token + sx * x4 + xx_t * (sg + dmg)
+                xa_in = token + sx * x5 + xx_t * (sa + dma)
+
+                w_raw = self.w0 + torch.tanh(xw @ self.w1) @ self.w2
+                w = torch.exp(-0.606531 * torch.sigmoid(w_raw.float()))
+                if mask_seq is not None:
+                    w = torch.where(mask_seq[:, t, None] == 0, torch.ones_like(w), w)
+
+                r, k, v = self.att_receptance(xr), self.att_key(xk), self.att_value(xv)
+
+                if self.layer_id == 0:
+                    vf = v
+                    v_first_list.append(vf)
+                else:
+                    vf = vf_seq[:, t, :] if vf_seq is not None else v
+                    vr = self.v0 + (xv @ self.v1) @ self.v2
+                    v = vf + (v - vf) * torch.sigmoid(vr)
+
+                a_out = torch.sigmoid(self.a0 + (xa_in @ self.a1) @ self.a2)
+                g = torch.sigmoid(xg_in @ self.g1) @ self.g2
+
+                kk = F.normalize((k * self.k_k).view(B, Hd, S), dim=-1, p=2.0).view(B, -1)
+                kt = k * (1 + (a_out - 1) * self.k_a)
+
+                vk = v.view(B, Hd, S, 1) @ kt.view(B, Hd, 1, S)
+                ab = (-kk).view(B, Hd, S, 1) @ (kk * a_out).view(B, Hd, 1, S)
+                state = state * w.view(B, Hd, 1, S) + (state @ ab.float() + vk.float()) * mask_t
+
+                r_h = r.view(B, Hd, S).unsqueeze(-1)
+                out = (state @ r_h).squeeze(-1)
+                out = self.att_group_norm(out.flatten(start_dim=1))
+
+                bonus = (
+                    (r.view(B, Hd, S) * kt.view(B, Hd, S) * self.r_k.view(Hd, S)).sum(
+                        dim=-1, keepdim=True
+                    )
+                    * v.view(B, Hd, S)
+                ).view(B, D)
+                out = self.att_output((out + bonus) * g)
+                if mask_seq is not None:
+                    out = out * mask_seq[:, t, None]
+                outputs.append(out)
+
+            out = torch.stack(outputs, dim=1)
+
         if rev:
             out = torch.flip(out, dims=[1])
 
@@ -343,6 +427,7 @@ class SpatialMixer(nn.Module):
         with_cls_token: bool = False,
         norm_layer: str = "layernorm",
         num_prepend_tokens: int = 0,
+        use_cpp: bool = False,
     ):
         super().__init__()
         self.n_embd = n_embd
@@ -354,7 +439,7 @@ class SpatialMixer(nn.Module):
         self.n_layer = n_layer
 
         self.dynamic_offset = DynamicOffset(n_embd)
-        self.scan = RecurrentScan(n_embd, n_head, layer_id, n_layer)
+        self.scan = RecurrentScan(n_embd, n_head, layer_id, n_layer, use_cpp=use_cpp)
         self.fusion_gate = nn.Linear(n_embd, n_embd, bias=False)
         self.gate_scale = nn.Parameter(torch.tensor(0.5))
         self.att_ln = get_norm_layer(norm_layer)(n_embd)
@@ -548,6 +633,7 @@ class Vision_RWKV7_Block(nn.Module):
         attnres_num_blocks: int = 8,
         attnres_recency_bias_init: float = 10.0,
         num_prepend_tokens: int = 0,
+        use_cpp: bool = False,
     ):
         super().__init__()
         self.layer_id = layer_id
@@ -603,6 +689,7 @@ class Vision_RWKV7_Block(nn.Module):
             with_cls_token=with_cls_token,
             norm_layer=norm_layer,
             num_prepend_tokens=num_prepend_tokens,
+            use_cpp=use_cpp,
         )
         self.channel_mix = ChannelMix(
             n_embd, drop_prob=drop_prob, init_values=init_values,
@@ -1248,6 +1335,7 @@ class Vision_RWKV7(nn.Module):
                     attnres_num_blocks=self.attnres_num_blocks,
                     attnres_recency_bias_init=self.attnres_recency_bias_init,
                     num_prepend_tokens=self.register_tokens,
+                    use_cpp=use_cpp,
                 )
                 for i in range(depth)
             ]

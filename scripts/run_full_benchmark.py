@@ -31,6 +31,7 @@ from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
 from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
+from spixrwkv7.models.hybrid_spixrwkv7 import create_hybrid_vision
 
 
 # =====================================================================
@@ -133,6 +134,7 @@ def build_rwkv_model(model_type, size, config, img_size):
             use_ema=False, beta=0.25,
             norm_layer=cfg.get("norm_layer", "rmsnorm"),
             act_layer=cfg.get("act_layer", "swiglu"),
+            use_cpp=True,
         )
     if model_type == "conv":
         return create_conv_vision_rwkv7(
@@ -169,6 +171,31 @@ def build_rwkv_model(model_type, size, config, img_size):
             act_layer=cfg.get("act_layer", "swiglu"),
             spixel_backend=cfg.get("spixel_backend", "diff_slic"),
             downsample_factor=float(cfg.get("downsample_factor", 16)),
+            gnn_conv=cfg.get("gnn_conv", "gatv2"),
+            gnn_heads=cfg.get("gnn_heads", 4),
+            gnn_aggr=cfg.get("gnn_aggr", "mean"),
+            use_cpp=True,
+        )
+    if model_type == "hybrid":
+        return create_hybrid_vision(
+            img_size=img_size, embed_dims=embed_dims, num_heads=num_heads,
+            depth=depth, init_values=cfg.get("init_values", 1e-5),
+            final_norm=cfg.get("final_norm", True),
+            out_indices=cfg.get("out_indices", [-1]),
+            register_tokens=cfg.get("register_tokens", 4),
+            num_superpixels=num_superpixels,
+            scatter_output=cfg.get("scatter_output", True),
+            diff_slic_iters=cfg.get("diff_slic_iters", 5),
+            compactness=cfg.get("compactness", 0.5),
+            norm_layer=cfg.get("norm_layer", "rmsnorm"),
+            act_layer=cfg.get("act_layer", "swiglu"),
+            spixel_backend=cfg.get("spixel_backend", "diff_slic"),
+            downsample_factor=float(cfg.get("downsample_factor", 16)),
+            num_rwkv_layers=cfg.get("num_rwkv_layers", 1),
+            num_gnn_layers=cfg.get("num_gnn_layers", 3),
+            knn_k=cfg.get("knn_k", 4),
+            dedup_neighbors=cfg.get("dedup_neighbors", True),
+            dedup_centroids=cfg.get("dedup_centroids", True),
             gnn_conv=cfg.get("gnn_conv", "gatv2"),
             gnn_heads=cfg.get("gnn_heads", 4),
             gnn_aggr=cfg.get("gnn_aggr", "mean"),
@@ -370,7 +397,7 @@ def main():
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     config_dir = Path("configs/model")
-    model_types = ["spix", "vq", "conv", "gnn"]
+    model_types = ["spix", "vq", "conv", "gnn", "hybrid"]
     num_classes = 3  # caltech101_classification: butterfly, dalmatian, dolphin
 
     print("=" * 78)
@@ -399,7 +426,7 @@ def main():
 
             # Build RWKV models
             for mt in model_types:
-                config_file = f"{'conv_' if mt == 'conv' else 'gnn_' if mt == 'gnn' else 'vq_' if mt == 'vq' else ''}{size}.yaml"
+                config_file = f"{'conv_' if mt == 'conv' else 'gnn_' if mt == 'gnn' else 'vq_' if mt == 'vq' else 'hybrid_' if mt == 'hybrid' else ''}{size}.yaml"
                 config_path = config_dir / config_file
                 if not config_path.exists():
                     print(f"  [{mt}] Config not found: {config_path}, skipping")
@@ -476,7 +503,7 @@ def main():
             print(f"  {'─' * 74}")
 
             for mt in model_types:
-                config_file = f"{'conv_' if mt == 'conv' else 'gnn_' if mt == 'gnn' else 'vq_' if mt == 'vq' else ''}{size}.yaml"
+                config_file = f"{'conv_' if mt == 'conv' else 'gnn_' if mt == 'gnn' else 'vq_' if mt == 'vq' else 'hybrid_' if mt == 'hybrid' else ''}{size}.yaml"
                 config_path = config_dir / config_file
                 if not config_path.exists():
                     print(f"  [{mt}] Config not found, skipping")
@@ -572,15 +599,15 @@ def main():
 
         # Speedup table
         print(f"\n  SPEEDUP vs ViT:")
-        print(f"  {'Size':<8} {'spix':>8} {'vq':>8} {'conv':>8} {'gnn':>8}")
-        print(f"  {'-' * 40}")
+        print(f"  {'Size':<8} {'spix':>8} {'vq':>8} {'conv':>8} {'gnn':>8} {'hybrid':>8}")
+        print(f"  {'-' * 48}")
         for size in args.sizes:
             vit_time = next((r["avg_ms"] for r in all_inf_results
                            if r["size"] == size and r["model_type"] == "vit"), None)
             if vit_time is None:
                 continue
             row = f"  {size:<8}"
-            for mt in ["spix", "vq", "conv", "gnn"]:
+            for mt in ["spix", "vq", "conv", "gnn", "hybrid"]:
                 mt_time = next((r["avg_ms"] for r in all_inf_results
                                if r["size"] == size and r["model_type"] == mt), None)
                 if mt_time is not None and mt_time > 0:

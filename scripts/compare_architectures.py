@@ -25,6 +25,7 @@ from spixrwkv7.kernels.optimized_vision import create_optimized_vision_rwkv7 as 
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
 from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision
+from spixrwkv7.models.hybrid_spixrwkv7 import create_hybrid_vision
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -371,6 +372,39 @@ def _build_rwkv(
             use_cpp=config.get("use_cpp", False),
             use_jit=config.get("use_jit", False),
         )
+    if model_type == "hybrid":
+        eff_df = downsample_factor if downsample_factor is not None else config.get("downsample_factor", 16)
+        return create_hybrid_vision(
+            img_size=img_size,
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            depth=depth,
+            num_rwkv_layers=config.get("num_rwkv_layers", 1),
+            num_gnn_layers=config.get("num_gnn_layers", 3),
+            init_values=config.get("init_values", 1e-5),
+            final_norm=config.get("final_norm", True),
+            out_indices=config.get("out_indices", [-1]),
+            num_superpixels=num_superpixels,
+            scatter_output=config.get("scatter_output", True),
+            diff_slic_iters=config.get("diff_slic_iters", 5),
+            compactness=config.get("compactness", 0.5),
+            norm_layer=config.get("norm_layer", "layernorm"),
+            act_layer=config.get("act_layer", "relu2"),
+            spixel_backend=config.get("spixel_backend", "diff_slic"),
+            downsample_factor=float(eff_df),
+            knn_k=config.get("knn_k", 4),
+            dedup_neighbors=config.get("dedup_neighbors", True),
+            dedup_centroids=config.get("dedup_centroids", True),
+            gnn_conv=config.get("gnn_conv", "gatv2"),
+            gnn_heads=config.get("gnn_heads", 4),
+            gnn_aggr=config.get("gnn_aggr", "mean"),
+            with_cls_token=config.get("with_cls_token", False),
+            output_cls_token=config.get("output_cls_token", False),
+            register_tokens=config.get("register_tokens", 4),
+            spixel_size=config.get("spixel_size", None),
+            use_cpp=config.get("use_cpp", False),
+            use_jit=config.get("use_jit", False),
+        )
     if downsample_factor is None:
         downsample_factor = config.get("downsample_factor", 16)
     if model_type == "spix":
@@ -500,7 +534,7 @@ def run_size_comparison(
                 continue
             print(f"\n--- {size.upper()} (factor={factor}) ---")
             for variant in run_variants:
-                config_path = config_dir / (f"conv_{size}.yaml" if variant == "conv" else f"gnn_{size}.yaml" if variant == "gnn" else f"vq_{size}.yaml" if variant == "vq" else f"{size}.yaml")
+                config_path = config_dir / (f"conv_{size}.yaml" if variant == "conv" else f"gnn_{size}.yaml" if variant == "gnn" else f"vq_{size}.yaml" if variant == "vq" else f"hybrid_{size}.yaml" if variant == "hybrid" else f"{size}.yaml")
                 config = load_config(str(config_path))
                 entry = _benchmark_variant(
                     variant, size, config, img_size, device, warmup_runs, timed_runs,
@@ -531,7 +565,7 @@ def run_resolution_sweep(
     print(f"{'=' * 70}")
 
     config_dir = Path("configs/model")
-    config_path = config_dir / f"gnn_{size}.yaml" if model_type == "gnn" else config_dir / f"conv_{size}.yaml" if model_type == "conv" else config_dir / f"vq_{size}.yaml" if model_type == "vq" else config_dir / f"{size}.yaml"
+    config_path = config_dir / f"gnn_{size}.yaml" if model_type == "gnn" else config_dir / f"conv_{size}.yaml" if model_type == "conv" else config_dir / f"vq_{size}.yaml" if model_type == "vq" else config_dir / f"hybrid_{size}.yaml" if model_type == "hybrid" else config_dir / f"{size}.yaml"
     config = load_config(str(config_path))
 
     embed_dims = config["embed_dims"]

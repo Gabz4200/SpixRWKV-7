@@ -22,10 +22,11 @@ import yaml
 from spixrwkv7.models.conv_spixrwkv7 import create_conv_vision_rwkv7
 from spixrwkv7.models.vq_rwkv7 import create_vq_rwkv7
 from spixrwkv7.models.gnn_spixrwkv7 import create_gnn_vision
+from spixrwkv7.models.hybrid_spixrwkv7 import create_hybrid_vision
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "configs" / "model"
 
-_VARIANT_PREFIX = {"spix": "", "conv": "conv_", "vq": "vq_", "gnn": "gnn_"}
+_VARIANT_PREFIX = {"spix": "", "conv": "conv_", "vq": "vq_", "gnn": "gnn_", "hybrid": "hybrid_"}
 _VALID_SIZES = ["tiny", "small", "medium", "large"]
 
 
@@ -111,7 +112,7 @@ def build_backbone(
             attnres_gate_type=config.get("attnres_gate_type", "bias"),
             attnres_num_blocks=config.get("attnres_num_blocks", 8),
             attnres_recency_bias_init=config.get("attnres_recency_bias_init", 10.0),
-            use_cpp=config.get("use_cpp", False),
+            use_cpp=config.get("use_cpp", True),
             use_jit=config.get("use_jit", False),
             conv_stem_channels=tuple(config.get("conv_stem_channels", [32, 64, 128])),
             conv_stem_kernel_sizes=tuple(config.get("conv_stem_kernel_sizes", [3, 5, 5])),
@@ -147,6 +148,7 @@ def build_backbone(
             attnres_gate_type=config.get("attnres_gate_type", "bias"),
             attnres_num_blocks=config.get("attnres_num_blocks", 8),
             attnres_recency_bias_init=config.get("attnres_recency_bias_init", 10.0),
+            use_cpp=config.get("use_cpp", True),
             use_jit=config.get("use_jit", False),
         )
 
@@ -170,6 +172,34 @@ def build_backbone(
             gnn_heads=config.get("gnn_heads", 4),
             gnn_aggr=config.get("gnn_aggr", "mean"),
             use_cpp=config.get("use_cpp", False),
+            use_jit=config.get("use_jit", False),
+        )
+
+    if model_type == "hybrid":
+        return create_hybrid_vision(
+            img_size=img,
+            embed_dims=config["embed_dims"],
+            num_heads=config["num_heads"],
+            depth=config["depth"],
+            num_rwkv_layers=config.get("num_rwkv_layers", 1),
+            num_gnn_layers=config.get("num_gnn_layers", 3),
+            drop_path_rate=config.get("drop_path_rate", 0.0),
+            scatter_output=config.get("scatter_output", True),
+            diff_slic_iters=config.get("diff_slic_iters", 5),
+            compactness=config.get("compactness", 0.5),
+            init_values=config.get("init_values", 1e-5),
+            norm_layer=config.get("norm_layer", "rmsnorm"),
+            act_layer=config.get("act_layer", "swiglu"),
+            spixel_backend=config.get("spixel_backend", "diff_slic"),
+            register_tokens=config.get("register_tokens", 4),
+            downsample_factor=config.get("downsample_factor", 16),
+            knn_k=config.get("knn_k", 4),
+            dedup_neighbors=config.get("dedup_neighbors", True),
+            dedup_centroids=config.get("dedup_centroids", True),
+            gnn_conv=config.get("gnn_conv", "gatv2"),
+            gnn_heads=config.get("gnn_heads", 4),
+            gnn_aggr=config.get("gnn_aggr", "mean"),
+            use_cpp=config.get("use_cpp", True),
             use_jit=config.get("use_jit", False),
         )
 
