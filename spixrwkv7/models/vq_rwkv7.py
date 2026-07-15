@@ -60,10 +60,10 @@ class VectorQuantizer(nn.Module):
             self.register_buffer("ema_w", torch.zeros(n_e, e_dim))
             self.decay = decay
             self.epsilon = epsilon
-            embed = torch.randn(n_e, e_dim)
+            embed = torch.randn(n_e, e_dim) * (1.0 / math.sqrt(e_dim))
             self.register_buffer("embedding", embed)
         else:
-            embed = torch.randn(n_e, e_dim)
+            embed = torch.randn(n_e, e_dim) * (1.0 / math.sqrt(e_dim))
             self.embedding = nn.Parameter(embed)
 
     def forward(
@@ -80,7 +80,7 @@ class VectorQuantizer(nn.Module):
         """
         B, C, H, W = z.shape
         z_flat = z.permute(0, 2, 3, 1).reshape(-1, C)
-        emb = self.embedding if self.use_ema else self.embedding
+        emb = self.embedding
 
         # ||z - e||^2 = ||z||^2 + ||e||^2 - 2 z·e
         if self.use_ema:
@@ -132,13 +132,15 @@ class VectorQuantizer(nn.Module):
 
 
 class _ResidualBlock(nn.Module):
-    """Conv-ReLU-Conv residual block."""
+    """Pre-activation residual block: GN → ReLU → Conv → GN → ReLU → Conv."""
 
     def __init__(self, dim: int):
         super().__init__()
         self.net = nn.Sequential(
+            nn.GroupNorm(1, dim),
             nn.ReLU(),
             nn.Conv2d(dim, dim, 3, padding=1),
+            nn.GroupNorm(1, dim),
             nn.ReLU(),
             nn.Conv2d(dim, dim, 1),
         )
@@ -147,16 +149,42 @@ class _ResidualBlock(nn.Module):
         return x + self.net(x)
 
 
+class _DecoderResidualBlock(nn.Module):
+    """Residual block for decoder with pre-concatenated skip connections.
+
+    The caller concatenates the skip features before calling this block,
+    so ``in_chans`` already includes the skip channels. A 1×1 projection
+    maps the concatenated features to ``out_chans``, and the residual
+    connection is a learned projection from the decoder-only channels.
+    """
+
+    def __init__(self, in_chans: int, out_chans: int):
+        super().__init__()
+        self.pre_norm = nn.GroupNorm(1, in_chans)
+        self.conv1 = nn.Conv2d(in_chans, out_chans, 3, padding=1)
+        self.post_norm = nn.GroupNorm(1, out_chans)
+        self.conv2 = nn.Conv2d(out_chans, out_chans, 1)
+        self.res_proj = nn.Conv2d(in_chans, out_chans, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = F.relu(self.pre_norm(x))
+        h = self.conv1(h)
+        h = F.relu(self.post_norm(h))
+        h = self.conv2(h)
+        return self.res_proj(x) + h
+
+
 # =====================================================================
 # ConvolutionalVQVAE — Encoder → Quantizer → Decoder
 # =====================================================================
 
 
 class ConvolutionalVQVAE(nn.Module):
-    """Convolutional VQ-VAE for image tokenization.
+    """Convolutional VQ-VAE with U-Net skip connections.
 
-    Encoder downsamples by ``downsample_factor`` (must be a power of 2),
-    quantizes features to a discrete codebook, then decodes back to pixels.
+    Encoder progressively downsamples and stores skip features at each level.
+    Decoder upsamples and concatenates corresponding encoder features before
+    each residual block, preserving spatial detail.
 
     Args:
         in_chans: Input image channels.
@@ -190,22 +218,27 @@ class ConvolutionalVQVAE(nn.Module):
             f"downsample_factor must be a power of 2, got {downsample_factor}"
         )
 
-        # --- Encoder ---
-        # Progressive channel doubling with stride-2 downsampling
         hidden_dim = max(64, latent_dim // 4)
-        enc_layers = [
+
+        # --- Encoder ---
+        self.enc_initial = nn.Sequential(
             nn.Conv2d(in_chans, hidden_dim, 3, padding=1),
+            nn.GroupNorm(1, hidden_dim),
             nn.ReLU(),
-        ]
+        )
+
+        self.enc_downsamples = nn.ModuleList()
+        self.enc_norms = nn.ModuleList()
+        channels = [hidden_dim]
         cur_dim = hidden_dim
         for i in range(n_down):
             out_dim = min(cur_dim * 2, latent_dim)
-            enc_layers.append(
+            self.enc_downsamples.append(
                 nn.Conv2d(cur_dim, out_dim, 4, stride=2, padding=1)
             )
-            enc_layers.append(nn.ReLU())
+            self.enc_norms.append(nn.GroupNorm(1, out_dim))
+            channels.append(out_dim)
             cur_dim = out_dim
-        self.encoder = nn.Sequential(*enc_layers)
 
         self.pre_quant_conv = nn.Conv2d(cur_dim, latent_dim, 1)
         self.enc_res = nn.Sequential(
@@ -221,23 +254,39 @@ class ConvolutionalVQVAE(nn.Module):
             decay=decay,
         )
 
-        # --- Decoder ---
+        # --- Decoder (with U-Net skip connections) ---
         self.post_quant_conv = nn.Conv2d(latent_dim, cur_dim, 1)
-        self.dec_res = nn.Sequential(
-            *[_ResidualBlock(cur_dim) for _ in range(num_res_blocks)]
+        self.dec_upsamples = nn.ModuleList()
+        self.dec_norms = nn.ModuleList()
+        self.dec_res_blocks = nn.ModuleList()
+
+        for i in range(n_down):
+            skip_chans = channels[-(i + 2)]  # encoder feature at this level
+            out_dim = max(cur_dim // 2, hidden_dim)
+            # Upsample first, then concat with skip → res_block
+            self.dec_upsamples.append(
+                nn.ConvTranspose2d(cur_dim, out_dim, 4, stride=2, padding=1)
+            )
+            self.dec_norms.append(nn.GroupNorm(1, out_dim))
+            self.dec_res_blocks.append(
+                _DecoderResidualBlock(out_dim + skip_chans, out_dim)
+            )
+            cur_dim = out_dim
+
+        self.dec_final = nn.Sequential(
+            nn.GroupNorm(1, cur_dim),
+            nn.ReLU(),
+            nn.Conv2d(cur_dim, in_chans, 3, padding=1),
+            nn.Sigmoid(),
         )
 
-        dec_layers = []
-        for i in range(n_down):
-            prev_dim = cur_dim
-            next_dim = max(cur_dim // 2, hidden_dim)
-            dec_layers.append(
-                nn.ConvTranspose2d(prev_dim, next_dim, 4, stride=2, padding=1)
-            )
-            dec_layers.append(nn.ReLU())
-            cur_dim = next_dim
-        dec_layers.append(nn.Conv2d(cur_dim, in_chans, 3, padding=1))
-        self.decoder = nn.Sequential(*dec_layers)
+        # Backward-compatible aliases for tests that access .encoder / .decoder
+        self.encoder = nn.Sequential(self.enc_initial, *[
+            item for pair in zip(self.enc_downsamples, self.enc_norms) for item in pair
+        ])
+        self.decoder = nn.Sequential(*[
+            item for triple in zip(self.dec_upsamples, self.dec_norms, self.dec_res_blocks) for item in triple
+        ], self.dec_final)
 
         self._init_weights()
 
@@ -253,44 +302,41 @@ class ConvolutionalVQVAE(nn.Module):
     def encode(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Encode input to quantized latents and codebook indices.
-
-        Returns:
-            z_q: (B, latent_dim, H', W') quantized features.
-            indices: (B, H', W') codebook indices.
-            q_loss: Scalar quantization loss.
-        """
-        h = self.encoder(x)
+        """Encode input to quantized latents and codebook indices."""
+        skips = []
+        h = self.enc_initial(x)
+        for down, norm in zip(self.enc_downsamples, self.enc_norms):
+            skips.append(h)
+            h = F.relu(norm(down(h)))
         h = self.pre_quant_conv(h)
         h = self.enc_res(h)
         z_q, indices, q_loss = self.quantizer(h)
-        return z_q, indices, q_loss
+        return z_q, indices, q_loss, skips
 
-    def decode(self, z_q: torch.Tensor) -> torch.Tensor:
-        """Decode quantized latents to reconstruction.
+    def decode(
+        self, z_q: torch.Tensor, skips: Optional[list] = None
+    ) -> torch.Tensor:
+        """Decode quantized latents to reconstruction with skip connections.
 
-        Args:
-            z_q: (B, latent_dim, H', W') quantized features.
-        Returns:
-            recon: (B, in_chans, H, W) reconstruction.
+        Standard U-Net pattern: upsample → concat skip → residual block.
         """
         h = self.post_quant_conv(z_q)
-        h = self.dec_res(h)
-        recon = self.decoder(h)
-        return recon
+        for i, (up, norm, res_block) in enumerate(
+            zip(self.dec_upsamples, self.dec_norms, self.dec_res_blocks)
+        ):
+            h = F.relu(norm(up(h)))
+            skip = skips[-(i + 1)] if skips is not None else None
+            if skip is not None:
+                h = torch.cat([h, skip], dim=1)
+            h = res_block(h)
+        return self.dec_final(h)
 
     def forward(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Full VQ-VAE forward: encode → quantize → decode.
-
-        Returns:
-            recon: Reconstructed image.
-            indices: Codebook indices.
-            q_loss: Quantization loss.
-        """
-        z_q, indices, q_loss = self.encode(x)
-        recon = self.decode(z_q)
+        """Full VQ-VAE forward: encode → quantize → decode."""
+        z_q, indices, q_loss, skips = self.encode(x)
+        recon = self.decode(z_q, skips)
         return recon, indices, q_loss
 
 
@@ -385,7 +431,7 @@ class VQTokenizer(nn.Module):
         N = H_tok * W_tok
 
         # 1. Encode and quantize → (B, latent_dim, H_tok, W_tok)
-        z_q, indices, q_loss = self.vqvae.encode(x)
+        z_q, indices, q_loss, _skips = self.vqvae.encode(x)
 
         # 2. Reshape to token sequence and project to embed_dims
         tokens = z_q.permute(0, 2, 3, 1).reshape(B, N, -1)
@@ -475,6 +521,7 @@ class VQ_RWKV7(nn.Module):
         attnres_gate_type: str = "bias",
         attnres_num_blocks: int = 8,
         attnres_recency_bias_init: float = 10.0,
+        knn_k: int = 4,
         **kwargs,
     ):
         super().__init__()
@@ -486,6 +533,7 @@ class VQ_RWKV7(nn.Module):
         self.scatter_output = scatter_output
         self.in_chans = in_chans
         self.downsample_factor = downsample_factor
+        self.knn_k = knn_k
 
         if num_heads is None:
             assert embed_dims % HEAD_SIZE == 0, (
@@ -504,6 +552,7 @@ class VQ_RWKV7(nn.Module):
             num_res_blocks=num_res_blocks,
             use_ema=use_ema,
             beta=beta,
+            knn_k=self.knn_k,
         )
 
         # ---- CLS / Register tokens ----
@@ -597,6 +646,7 @@ class VQ_RWKV7(nn.Module):
                 attnres_gate_type=attnres_gate_type,
                 attnres_num_blocks=attnres_num_blocks,
                 attnres_recency_bias_init=attnres_recency_bias_init,
+                num_prepend_tokens=self.register_tokens,
             )
             for i in range(depth)
         ])
@@ -669,30 +719,15 @@ class VQ_RWKV7(nn.Module):
         inv_order = out["inv_order"]
         batch_idx = out["batch_idx"]
         h_s, w_s = out["h_s"], out["w_s"]
-        self._last_q_loss = out["q_loss"]  # kept attached so it can participate in loss.backward()
-
-        n_extra_front = self.register_tokens
+        self._last_q_loss = out["q_loss"]
 
         # Register tokens — prepended (DINOv2-style)
+        # Neighbors stay at (B, N, K) — q_shift_graph_multihead handles
+        # prepend tokens via num_prepend_tokens parameter.
         if self.register_tokens > 0:
             assert self.reg_token is not None
             reg_tokens = self.reg_token.expand(B, -1, -1)
             tokens = torch.cat((reg_tokens, tokens), dim=1)
-
-        # Pad neighbors / dists for register tokens (prepended)
-        if n_extra_front > 0:
-            # Shift existing neighbor indices to account for prepended tokens
-            neighbors = neighbors + n_extra_front
-            # Self-connections for register tokens: each points to its own index
-            self_loop = torch.arange(
-                n_extra_front, device=neighbors.device
-            ).unsqueeze(0).unsqueeze(-1).expand(B, -1, neighbors.shape[-1])
-            neighbors = torch.cat([self_loop, neighbors], dim=1)
-            zero_dists = torch.zeros(
-                B, n_extra_front, neighbor_dists.shape[-1],
-                device=neighbor_dists.device, dtype=neighbor_dists.dtype,
-            )
-            neighbor_dists = torch.cat([zero_dists, neighbor_dists], dim=1)
 
         # CLS token — appended at sequence end
         if self.with_cls_token:
@@ -782,6 +817,7 @@ def create_vq_rwkv7(
     attnres_gate_type: str = "bias",
     attnres_num_blocks: int = 8,
     attnres_recency_bias_init: float = 10.0,
+    knn_k: int = 4,
     use_jit: bool = False,
 ) -> torch.nn.Module:
     """Create a VQ_RWKV7 model enforced to 6-channel input.
@@ -819,5 +855,6 @@ def create_vq_rwkv7(
         attnres_gate_type=attnres_gate_type,
         attnres_num_blocks=attnres_num_blocks,
         attnres_recency_bias_init=attnres_recency_bias_init,
+        knn_k=knn_k,
     )
     return maybe_compile(_model, use_jit=use_jit)

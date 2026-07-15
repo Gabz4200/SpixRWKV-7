@@ -145,6 +145,7 @@ class RecurrentScan(nn.Module):
         self.k_k = nn.Parameter(torch.zeros(n_embd))
         self.k_a = nn.Parameter(torch.zeros(n_embd))
         self.r_k = nn.Parameter(torch.zeros(n_head, self.head_size))
+        self.init_state = nn.Parameter(torch.zeros(n_head, self.head_size, self.head_size))
 
         # Linear projections
         self.att_receptance = nn.Linear(n_embd, n_embd, bias=False)
@@ -152,7 +153,7 @@ class RecurrentScan(nn.Module):
         self.att_value = nn.Linear(n_embd, n_embd, bias=False)
         self.att_output = nn.Linear(n_embd, n_embd, bias=False)
         self.att_group_norm = nn.GroupNorm(
-            n_head, n_embd, eps=self.n_head * 1e-5, affine=True
+            n_head, n_embd, eps=1e-5, affine=True
         )
 
     def forward(
@@ -178,7 +179,7 @@ class RecurrentScan(nn.Module):
         )
         mask_seq = torch.flip(mask, dims=[1]) if (mask is not None and rev) else mask
 
-        state = torch.zeros(B, Hd, S, S, device=dev)
+        state = self.init_state[:Hd, :S, :S].unsqueeze(0).expand(B, -1, -1, -1).clone()
         state_time = torch.zeros(B, D, device=dev)
 
         tm = self.time_mix
@@ -365,18 +366,21 @@ class SpatialMixer(nn.Module):
         init_values: Optional[float] = None,
         with_cls_token: bool = False,
         norm_layer: str = "layernorm",
+        num_prepend_tokens: int = 0,
     ):
         super().__init__()
         self.n_embd = n_embd
         self.n_head = n_head
         self.head_size = HEAD_SIZE
         self.with_cls_token = with_cls_token
+        self.num_prepend_tokens = num_prepend_tokens
         self.layer_id = layer_id
         self.n_layer = n_layer
 
         self.dynamic_offset = _DynamicOffset(n_embd)
         self.scan = RecurrentScan(n_embd, n_head, layer_id, n_layer)
         self.fusion_gate = nn.Linear(n_embd, n_embd, bias=False)
+        self.gate_scale = nn.Parameter(torch.tensor(0.5))
         self.att_ln = get_norm_layer(norm_layer)(n_embd)
         self.drop_path = DropPath(drop_prob) if drop_prob > 0.0 else nn.Identity()
 
@@ -400,6 +404,7 @@ class SpatialMixer(nn.Module):
             neighbors=neighbors,
             head_dim=self.head_size,
             with_cls_token=self.with_cls_token,
+            num_prepend_tokens=self.num_prepend_tokens,
         )
         xx = xs - xn
         dm = self.dynamic_offset(xn, xx)
@@ -416,7 +421,7 @@ class SpatialMixer(nn.Module):
         mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         xx, dm = self._spatial_prep(xn, neighbors)
-        x_gate = xn + xx * 0.5
+        x_gate = xn + xx * self.gate_scale
 
         out_fwd, vf_fwd = self.scan(xn, xx, dm, "forward", v_first_fwd, mask=mask)
         out_bwd, vf_bwd = self.scan(xn, xx, dm, "backward", v_first_bwd, mask=mask)
@@ -449,6 +454,7 @@ class ChannelMix(nn.Module):
         init_values: Optional[float] = None,
         norm_layer: str = "layernorm",
         act_layer: str = "relu2",
+        num_prepend_tokens: int = 0,
     ):
         super().__init__()
         self.act_layer = act_layer
@@ -461,7 +467,8 @@ class ChannelMix(nn.Module):
         self.ffn_value = nn.Linear(dim_ffn, n_embd, bias=False)
         norm_cls = get_norm_layer(norm_layer)
         self.norm = norm_cls(n_embd)
-        self.ffn_ln = norm_cls(n_embd)
+        self.num_prepend_tokens = num_prepend_tokens
+        self.ffn_dropout = nn.Dropout(drop_prob) if drop_prob > 0.0 else nn.Identity()
         self.drop_path = DropPath(drop_prob) if drop_prob > 0.0 else nn.Identity()
 
         # LayerScale: per-channel learnable scale after sublayer output.
@@ -485,6 +492,7 @@ class ChannelMix(nn.Module):
             neighbors=neighbors,
             head_dim=head_dim,
             with_cls_token=with_cls_token,
+            num_prepend_tokens=self.num_prepend_tokens,
         )
         xx = xs - xn
         xk = xn + xx * self.ffn_x_k
@@ -499,8 +507,8 @@ class ChannelMix(nn.Module):
             k = F.silu(gate) * val
         else:
             raise ValueError(f"Unknown activation layer: {self.act_layer}")
+        k = self.ffn_dropout(k)
         ffn_out = self.ffn_value(k)
-        ffn_out = self.ffn_ln(ffn_out)
         if self.gamma2 is not None:
             ffn_out = self.gamma2 * ffn_out  # LayerScale (CaiT et al., 2021)
         return x + self.drop_path(ffn_out)
@@ -573,6 +581,7 @@ class Vision_RWKV7_Block(nn.Module):
         attnres_gate_type: str = "bias",
         attnres_num_blocks: int = 8,
         attnres_recency_bias_init: float = 10.0,
+        num_prepend_tokens: int = 0,
     ):
         super().__init__()
         self.layer_id = layer_id
@@ -581,6 +590,7 @@ class Vision_RWKV7_Block(nn.Module):
         self.n_head = n_head
         self.head_size = HEAD_SIZE
         self.with_cls_token = with_cls_token
+        self.num_prepend_tokens = num_prepend_tokens
 
         # Attention Residuals configuration
         self.use_attnres = use_attnres
@@ -626,10 +636,12 @@ class Vision_RWKV7_Block(nn.Module):
             drop_prob=drop_prob, init_values=init_values,
             with_cls_token=with_cls_token,
             norm_layer=norm_layer,
+            num_prepend_tokens=num_prepend_tokens,
         )
         self.channel_mix = ChannelMix(
             n_embd, drop_prob=drop_prob, init_values=init_values,
             norm_layer=norm_layer, act_layer=act_layer,
+            num_prepend_tokens=num_prepend_tokens,
         )
         self._init_weights()
 
@@ -759,6 +771,7 @@ class SuperpixelEmbedding(nn.Module):
             )
 
         self.conv = nn.Conv2d(in_chans, self.conv_chans, kernel_size=3, padding=1)
+        self.raw_norm = nn.LayerNorm(in_chans)
         self.proj = nn.Linear(embed_dims, embed_dims)
         self.norm = get_norm_layer(norm_layer)(embed_dims)
         self.num_freqs = 8
@@ -787,8 +800,9 @@ class SuperpixelEmbedding(nn.Module):
         # Normalize mask over spatial dimensions to get soft/hard weights
         weights = mask / (mask.sum(dim=(2, 3), keepdim=True) + 1e-6)
 
-        # 2. Pool raw features directly (preserves in_chans)
+        # 2. Pool raw features directly (preserves in_chans) and normalize
         pooled_raw = torch.einsum("bkhw,bchw->bkc", weights, x)
+        pooled_raw = self.raw_norm(pooled_raw)
 
         # 3. Conv and pool (adds conv_chans)
         x_conv = self.conv(x)
@@ -854,6 +868,7 @@ class SuperpixelTokenizer(nn.Module):
         norm_layer: str = "layernorm",
         spixel_backend: str = "diff_slic",
         downsample_factor: float = 1.0,
+        knn_k: int = 4,
     ):
         super().__init__()
         self.in_chans = in_chans
@@ -864,6 +879,7 @@ class SuperpixelTokenizer(nn.Module):
         self.spixel_backend = spixel_backend
         self.diff_slic_iters = diff_slic_iters
         self.downsample_factor = float(downsample_factor)
+        self.knn_k = knn_k
         if self.downsample_factor < 1.0:
             raise ValueError(
                 f"downsample_factor must be >= 1.0, got {self.downsample_factor}"
@@ -1102,8 +1118,8 @@ class SuperpixelTokenizer(nn.Module):
             raise ValueError(f"Unknown spixel_backend: {self.spixel_backend}")
 
         # KNN graph + Hilbert reorder
-        neighbors, neighbor_dists = build_knn_graph(centroids.detach(), k=4)
-        coords_int = ((centroids + 1.0) * 4096).long().clamp(0, 8191)
+        neighbors, neighbor_dists = build_knn_graph(centroids.detach(), k=self.knn_k)
+        coords_int = ((centroids + 1.0) * 4095).long().clamp(0, 8191)
         order = hilbert_sort_batched(coords_int)
         inv_order = torch.argsort(order, dim=1)
         batch_idx = torch.arange(B, device=x.device)
@@ -1165,6 +1181,7 @@ class Vision_RWKV7(nn.Module):
         attnres_num_blocks: int = 8,
         attnres_recency_bias_init: float = 10.0,
         downsample_factor: float = 1.0,
+        knn_k: int = 4,
         **kwargs,
     ):
         super().__init__()
@@ -1180,6 +1197,7 @@ class Vision_RWKV7(nn.Module):
         self.spixel_size = spixel_size
         self.spixel_backend = spixel_backend
         self.downsample_factor = downsample_factor
+        self.knn_k = knn_k
 
         # Attention Residuals configuration
         self.use_attnres = use_attnres
@@ -1209,6 +1227,7 @@ class Vision_RWKV7(nn.Module):
                     norm_layer=norm_layer,
                     spixel_backend=spixel_backend,
                     downsample_factor=downsample_factor,
+                    knn_k=knn_k,
                 )
         # Keep patch_embed as a public alias for backward compat (tests access .patch_embed.mode)
         self.patch_embed = self.tokenizer.patch_embed
@@ -1283,6 +1302,7 @@ class Vision_RWKV7(nn.Module):
                     attnres_gate_type=self.attnres_gate_type,
                     attnres_num_blocks=self.attnres_num_blocks,
                     attnres_recency_bias_init=self.attnres_recency_bias_init,
+                    num_prepend_tokens=self.register_tokens,
                 )
                 for i in range(depth)
             ]
@@ -1437,10 +1457,13 @@ class Vision_RWKV7(nn.Module):
             # across forward passes (prevents graph free after backward).
             self.last_attnres_history = [t.detach() for t in attnres_history] if attnres_history else None
             self.last_attnres_history_patches = [get_patches(t) for t in self.last_attnres_history] if self.last_attnres_history is not None else None
+            _inv_order = inv_order.detach()
+            _batch_idx = batch_idx.detach()
+            _global_soft_mask = global_soft_mask.detach() if global_soft_mask is not None else None
+            _global_labels = global_labels.detach() if global_labels is not None else None
             self.last_project_fn = lambda patch_tokens: self._project_output(
-                patch_tokens, inv_order, batch_idx,
-                global_soft_mask.detach() if global_soft_mask is not None else None,
-                global_labels,
+                patch_tokens, _inv_order, _batch_idx,
+                _global_soft_mask, _global_labels,
                 H, W, h_s, w_s,
             )
 
@@ -1459,27 +1482,41 @@ class ClassificationHead(nn.Module):
     applies global average pooling, LayerNorm, and a linear projection to
     class logits. Designed as a separate module — not integrated into the
     backbone — so the backbone remains usable for dense prediction tasks.
+
+    Args:
+        embed_dims: Token embedding dimension.
+        num_classes: Number of output classes.
+        norm_layer: Normalization layer name.
+        use_attnres: Enable attention residual components for block-level
+            cross-attention over backbone features.
     """
 
-    def __init__(self, embed_dims: int, num_classes: int, norm_layer: str = "layernorm"):
+    def __init__(
+        self,
+        embed_dims: int,
+        num_classes: int,
+        norm_layer: str = "layernorm",
+        use_attnres: bool = False,
+    ):
         super().__init__()
         self.norm = get_norm_layer(norm_layer)(embed_dims)
         self.head = nn.Linear(embed_dims, num_classes)
+        self.use_attnres = use_attnres
 
-        # Attention Residuals components for classification head
-        self.out_res_proj = nn.Linear(embed_dims, 1, bias=False)
-        self.out_res_norm = get_norm_layer(norm_layer)(embed_dims)
-        self.out_res_bias = nn.Parameter(torch.tensor(10.0))
-        nn.init.zeros_(self.out_res_proj.weight)
+        if use_attnres:
+            self.out_res_proj = nn.Linear(embed_dims, 1, bias=False)
+            self.out_res_norm = get_norm_layer(norm_layer)(embed_dims)
+            self.out_res_bias = nn.Parameter(torch.tensor(10.0))
+            nn.init.zeros_(self.out_res_proj.weight)
 
     def forward(
         self,
         x: torch.Tensor,
         attnres_history: Optional[list[torch.Tensor]] = None,
-        project_fn = None,
+        project_fn=None,
     ) -> torch.Tensor:
         # x: (B, embed_dims, h, w) from backbone output tuple entry
-        if attnres_history is not None and len(attnres_history) > 0 and project_fn is not None:
+        if self.use_attnres and attnres_history is not None and len(attnres_history) > 0 and project_fn is not None:
             # V: (L, B, SeqLen, D)
             V = torch.stack(attnres_history, dim=0)
             K = self.out_res_norm(V)
@@ -1523,6 +1560,7 @@ def create_vision_rwkv7(
     attnres_recency_bias_init: float = 10.0,
     use_jit: bool = False,
     downsample_factor: float = 1.0,
+    knn_k: int = 4,
 ) -> torch.nn.Module:
     """
     Creates a Vision_RWKV7 model enforced to 6-channel input (L, a, b, alpha, x, y).
@@ -1557,5 +1595,6 @@ def create_vision_rwkv7(
         attnres_num_blocks=attnres_num_blocks,
         attnres_recency_bias_init=attnres_recency_bias_init,
         downsample_factor=downsample_factor,
+        knn_k=knn_k,
     )
     return maybe_compile(_model, use_jit=use_jit)

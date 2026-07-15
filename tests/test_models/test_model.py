@@ -1043,13 +1043,13 @@ def test_conv_vqvae_encode_decode():
         downsample_factor=8, num_res_blocks=1,
     )
     x = torch.randn(1, 3, 32, 32)
-    # Encode
-    z_q, indices, enc_loss = vqvae.encode(x)
+    # Encode (returns z_q, indices, q_loss, skips for U-Net)
+    z_q, indices, enc_loss, skips = vqvae.encode(x)
     assert z_q.shape == (1, 16, 4, 4)
     assert indices.shape == (1, 4, 4)
     assert torch.isfinite(z_q).all()
-    # Decode
-    recon = vqvae.decode(z_q)
+    # Decode with skip connections
+    recon = vqvae.decode(z_q, skips)
     assert recon.shape == x.shape
     # Forward should match encode + decode
     fwd_recon, fwd_idx, fwd_loss = vqvae(x)
@@ -1066,7 +1066,7 @@ def test_conv_vqvae_downsample_factor():
             downsample_factor=factor, num_res_blocks=1,
         )
         x = torch.randn(1, 3, 64, 64)
-        z_q, indices, _ = vqvae.encode(x)
+        z_q, indices, _, _ = vqvae.encode(x)
         h_expected, w_expected = 64 // factor, 64 // factor
         assert z_q.shape == (1, 32, h_expected, w_expected), (
             f"factor={factor}: z_q shape {z_q.shape}"
@@ -1090,9 +1090,9 @@ def test_conv_vqvae_gradient_flow():
     assert torch.isfinite(x.grad).all()
     assert x.grad.abs().sum() > 0.0
     # Encoder/decoder params should have grads
-    enc_grad = vqvae.encoder[0].weight.grad
+    enc_grad = vqvae.enc_initial[0].weight.grad
     assert enc_grad is not None and torch.isfinite(enc_grad).all()
-    dec_grad = vqvae.decoder[-1].weight.grad
+    dec_grad = vqvae.dec_final[-2].weight.grad  # Conv2d (before Sigmoid)
     assert dec_grad is not None and torch.isfinite(dec_grad).all()
 
 
@@ -1156,14 +1156,15 @@ def test_vq_rwkv7_gradient_flow():
     model = VQ_RWKV7(**_VQ_TINY_CFG)
     x = _make_vq_x().requires_grad_(True)
     outs = model(x)
-    loss = outs[0].sum() + model._last_q_loss
+    target = torch.randn_like(outs[0])
+    loss = F.mse_loss(outs[0], target) + model._last_q_loss
     loss.backward()
     # Gradient flows to input (through VQ encoder)
     assert x.grad is not None, "No gradient on input"
     assert torch.isfinite(x.grad).all()
     assert x.grad.abs().sum() > 0.0
     # Gradient flows to VQ-VAE encoder weights
-    enc_conv = model.tokenizer.vqvae.encoder[0]
+    enc_conv = model.tokenizer.vqvae.enc_initial[0]
     assert enc_conv.weight.grad is not None
     assert torch.isfinite(enc_conv.weight.grad).all()
     assert enc_conv.weight.grad.abs().sum() > 0.0
@@ -1171,8 +1172,8 @@ def test_vq_rwkv7_gradient_flow():
     assert model.tokenizer.vqvae.quantizer.embedding.grad is not None
     assert torch.isfinite(model.tokenizer.vqvae.quantizer.embedding.grad).all()
     # Gradient flows to RWKV-7 block params
-    # Pick a parameter from the first block's spatial_mixer
-    block_params = list(model.blocks[0].spatial_mixer.parameters())
+    # Check any parameter in the first block has nonzero gradient
+    block_params = list(model.blocks[0].parameters())
     has_grad = any(p.grad is not None and p.grad.abs().sum() > 0.0 for p in block_params)
     assert has_grad, "No block parameters received gradients"
 

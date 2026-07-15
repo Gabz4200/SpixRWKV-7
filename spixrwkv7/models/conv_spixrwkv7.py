@@ -13,6 +13,7 @@
 #        └── ConvSuperpixelEmbedding(features, masks) → tokens → RWKV-7 blocks
 
 import math
+import warnings
 from typing import Optional, Sequence, Tuple
 
 import torch
@@ -85,6 +86,15 @@ class ConvStem(nn.Module):
                 f"stem_channels ({n}), stem_kernel_sizes ({len(stem_kernel_sizes)}), "
                 f"and stem_strides ({len(stem_strides)}) must have the same length"
             )
+        if norm_layer == "batchnorm2d":
+            warnings.warn(
+                "BatchNorm2d in ConvStem uses batch statistics during training "
+                "but running statistics during eval. This changes the feature "
+                "distribution between train/eval, which can affect superpixel "
+                "segmentation boundaries. Consider 'layernorm' (GroupNorm) instead.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         self.total_reduction = 1
         for s in stem_strides:
@@ -129,6 +139,9 @@ class ConvStem(nn.Module):
         self.stem = nn.Sequential(*layers)
         self.out_chans = stem_channels[-1]
 
+        # Residual connection when first block preserves spatial dims and channels
+        self._use_residual = (stem_strides[0] == 1 and stem_channels[0] == in_chans)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Extract deep features at reduced spatial resolution.
 
@@ -139,6 +152,8 @@ class ConvStem(nn.Module):
             (B, out_chans, H // total_reduction, W // total_reduction)
             feature map.
         """
+        if self._use_residual:
+            return x + self.stem(x)
         return self.stem(x)
 
 
@@ -732,6 +747,7 @@ class ConvolutionalVision_RWKV7(nn.Module):
                     attnres_gate_type=self.attnres_gate_type,
                     attnres_num_blocks=self.attnres_num_blocks,
                     attnres_recency_bias_init=self.attnres_recency_bias_init,
+                    num_prepend_tokens=self.register_tokens,
                 )
                 for i in range(depth)
             ]
@@ -928,12 +944,16 @@ class ConvolutionalVision_RWKV7(nn.Module):
                 if self.last_attnres_history is not None
                 else None
             )
+            _inv_order = inv_order.detach()
+            _batch_idx = batch_idx.detach()
+            _global_soft_mask = global_soft_mask.detach() if global_soft_mask is not None else None
+            _global_labels = global_labels.detach() if global_labels is not None else None
             self.last_project_fn = lambda pt: self._project_output(
                 pt,
-                inv_order,
-                batch_idx,
-                global_soft_mask.detach() if global_soft_mask is not None else None,
-                global_labels,
+                _inv_order,
+                _batch_idx,
+                _global_soft_mask,
+                _global_labels,
                 Hf,
                 Wf,
                 h_s,

@@ -43,6 +43,7 @@ from torch_geometric.nn import (
 
 from spixrwkv7.jit import maybe_compile
 from spixrwkv7.layers.drop import DropPath
+from spixrwkv7.layers.graph import HEAD_SIZE
 from spixrwkv7.models.spixrwkv7 import SuperpixelTokenizer, get_norm_layer
 
 # Convs whose output head-multiplies features (need embed_dims % heads == 0).
@@ -108,16 +109,12 @@ def _gnn_forward(
 ) -> Tensor:
     """Dispatch a forward call, passing edge info only where the layer accepts it.
 
-    Based on the PyG operator cheatsheet: GCN/Graph/SAGE/Gated/ResGated accept
-    a 1-D ``edge_weight``; GAT/GATv2/Transformer accept multi-dim ``edge_attr``;
-    GIN operates on node features alone.
+    GCN/Graph/SAGE accept a 1-D ``edge_weight``; GAT/GATv2/Transformer accept
+    multi-dim ``edge_attr``; GIN/Gated/ResGated operate on node features alone.
     """
     if conv_type in ("gcn", "graphconv"):
         assert edge_weight is not None
         return conv(x, edge_index, edge_weight=edge_weight)
-    # SAGE/GAT/GATv2/GIN/Gated/ResGated/Transformer learn their own message
-    # weights; our per-edge distance features are not consumed in this PyG
-    # version (would require edge_dim configuration at construction).
     return conv(x, edge_index)
 
 
@@ -156,6 +153,7 @@ class GNNFeedForward(nn.Module):
         norm_cls = get_norm_layer(norm_layer)
         self.norm = norm_cls(embed_dims)
         self.ffn_ln = norm_cls(embed_dims)
+        self.ffn_dropout = nn.Dropout(drop_prob) if drop_prob > 0.0 else nn.Identity()
         self.drop_path = DropPath(drop_prob) if drop_prob > 0.0 else nn.Identity()
         # LayerScale: zero-init suppresses feature blow-up at training start.
         if init_values is not None:
@@ -176,6 +174,7 @@ class GNNFeedForward(nn.Module):
             k = F.silu(gate) * val
         else:
             raise ValueError(f"Unknown activation layer: {self.act_layer}")
+        k = self.ffn_dropout(k)
         out = self.ffn_value(k)
         out = self.ffn_ln(out)
         if self.gamma2 is not None:
@@ -189,7 +188,12 @@ class GNNFeedForward(nn.Module):
 
 
 class GNNBlock(nn.Module):
-    """Single GNN residual block: pre-norm conv message passing + FFN."""
+    """Single GNN residual block: pre-norm conv message passing + FFN.
+
+    Supports optional attention residuals (block-level cross-attention
+    over previous block representations) for parity with the base
+    Vision_RWKV7_Block.
+    """
 
     def __init__(
         self,
@@ -201,6 +205,9 @@ class GNNBlock(nn.Module):
         init_values: Optional[float] = None,
         norm_layer: str = "layernorm",
         act_layer: str = "relu2",
+        use_attnres: bool = False,
+        attnres_gate_type: str = "bias",
+        attnres_recency_bias_init: float = 10.0,
     ):
         super().__init__()
         self.conv_type = conv_type
@@ -219,13 +226,59 @@ class GNNBlock(nn.Module):
         else:
             self.gamma1 = None
 
+        # Attention residuals
+        self.use_attnres = use_attnres
+        self.attnres_gate_type = attnres_gate_type
+        if use_attnres:
+            self.attn_res_proj = nn.Linear(embed_dims, 1, bias=False)
+            self.attn_res_norm = get_norm_layer(norm_layer)(embed_dims)
+            self.attn_res_bias = nn.Parameter(torch.tensor(attnres_recency_bias_init))
+            nn.init.zeros_(self.attn_res_proj.weight)
+            if attnres_gate_type == "sigmoid_scalar":
+                self.attn_res_gate_logit = nn.Parameter(torch.tensor(-2.0))
+            elif attnres_gate_type == "sigmoid_vector":
+                self.attn_res_gate_proj = nn.Linear(embed_dims, embed_dims, bias=True)
+                nn.init.zeros_(self.attn_res_gate_proj.weight)
+                nn.init.constant_(self.attn_res_gate_proj.bias, -2.0)
+            elif attnres_gate_type == "learnable_alpha":
+                self.attn_res_alpha = nn.Parameter(torch.tensor(0.0))
+
+    def _apply_attnres_gate(
+        self, partial: Tensor, h_attn: Tensor
+    ) -> Tensor:
+        if self.attnres_gate_type == "sigmoid_scalar":
+            gate = torch.sigmoid(self.attn_res_gate_logit)
+            return (1 - gate) * partial + gate * h_attn
+        elif self.attnres_gate_type == "sigmoid_vector":
+            gate = torch.sigmoid(self.attn_res_gate_proj(partial))
+            return (1 - gate) * partial + gate * h_attn
+        elif self.attnres_gate_type == "learnable_alpha":
+            return (1 - self.attn_res_alpha) * partial + self.attn_res_alpha * h_attn
+        return h_attn
+
     def forward(
         self,
         x: Tensor,
         edge_index: Tensor,
         edge_weight: Optional[Tensor],
         edge_attr: Optional[Tensor],
+        attnres_history: Optional[list] = None,
     ) -> Tensor:
+        # Optional: attend over previous block representations
+        if self.use_attnres and attnres_history is not None and len(attnres_history) > 0:
+            from spixrwkv7.models.spixrwkv7 import block_attn_res
+            # GNN features are (B*(R+N), D); reshape to (B, R+N, D) for attnres
+            n_nodes = x.shape[0]
+            B = attnres_history[0].shape[0]
+            T = n_nodes // B
+            x_3d = x.view(B, T, -1)
+            hist_3d = [h.view(B, T, -1) if h.dim() == 2 else h for h in attnres_history]
+            h_attn = block_attn_res(
+                hist_3d, x_3d,
+                self.attn_res_proj, self.attn_res_norm, self.attn_res_bias,
+            )
+            x = self._apply_attnres_gate(x, h_attn.view(B * T, -1))
+
         h = self.norm1(x)
         out = _gnn_forward(
             self.conv, self.conv_type, h, edge_index, edge_weight, edge_attr
@@ -274,11 +327,16 @@ class GNNVision(nn.Module):
         norm_layer: str = "layernorm",
         act_layer: str = "relu2",
         spixel_backend: str = "diff_slic",
+        knn_k: int = 4,
         # GNN-specific configuration
         gnn_conv: str = "gatv2",
         gnn_heads: int = 4,
         gnn_aggr: str = "mean",
         jk: str = "none",
+        # Attention residual configuration
+        use_attnres: bool = False,
+        attnres_gate_type: str = "bias",
+        attnres_recency_bias_init: float = 10.0,
         **kwargs,
     ):
         super().__init__()
@@ -298,12 +356,15 @@ class GNNVision(nn.Module):
         self.gnn_heads = gnn_heads
         self.gnn_aggr = gnn_aggr
         self.jk = jk
+        self.use_attnres = use_attnres
+        self.attnres_gate_type = attnres_gate_type
+        self.attnres_recency_bias_init = attnres_recency_bias_init
 
         if num_heads is None:
             assert (
-                embed_dims % 64 == 0
-            ), f"embed_dims={embed_dims} must be divisible by 64 if num_heads is not provided"
-            num_heads = embed_dims // 64
+                embed_dims % HEAD_SIZE == 0
+            ), f"embed_dims={embed_dims} must be divisible by HEAD_SIZE={HEAD_SIZE} if num_heads is not provided"
+            num_heads = embed_dims // HEAD_SIZE
 
         # Force embed_dims divisible by gnn heads for attention convs.
         if gnn_conv in _ATTENTION_CONVS and embed_dims % gnn_heads != 0:
@@ -321,6 +382,7 @@ class GNNVision(nn.Module):
             norm_layer=norm_layer,
             spixel_backend=spixel_backend,
             downsample_factor=downsample_factor,
+            knn_k=knn_k,
         )
         # Public alias expected by benchmark scripts (tokenizer access).
         self.patch_embed = self.tokenizer.patch_embed
@@ -391,6 +453,9 @@ class GNNVision(nn.Module):
                     init_values=init_values,
                     norm_layer=norm_layer,
                     act_layer=act_layer,
+                    use_attnres=self.use_attnres,
+                    attnres_gate_type=self.attnres_gate_type if hasattr(self, 'attnres_gate_type') else "bias",
+                    attnres_recency_bias_init=self.attnres_recency_bias_init if hasattr(self, 'attnres_recency_bias_init') else 10.0,
                 )
                 for i in range(depth)
             ]
@@ -415,16 +480,15 @@ class GNNVision(nn.Module):
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """Convert (B, N, k) KNN neighbours into a batched PyG edge set.
 
-        When ``num_register > 0``, register nodes (first R indices per batch
-        item) are connected to ALL superpixel nodes (bipartite), while
-        superpixel nodes retain their KNN edges.  This gives each superpixel
-        node ``4 + R`` incoming edges (4 KNN neighbours + R register nodes),
-        and each register node ``N`` incoming edges (every superpixel).
+        Builds a **bidirectional** KNN graph: for each directed edge (i→j)
+        the reverse edge (j→i) is also added, ensuring symmetric message
+        passing.  When ``num_register > 0``, register nodes (first R indices
+        per batch item) are connected to ALL superpixel nodes (bipartite)
+        with inverse-distance weights.
 
         Returns ``(edge_index (2, E), edge_weight (E,), edge_attr (E, 1))``
         with global node indices ``b*(N+R) + local`` so graphs for each batch
-        item stay disjoint.  Edge weights are inverse distances (KNN) or
-        uniform 1.0 (register edges).
+        item stay disjoint.
         """
         B, N, k = neighbors.shape
         device = neighbors.device
@@ -437,16 +501,27 @@ class GNNVision(nn.Module):
             base = b * N_total
             sp_offset = base + R
 
-            # --- KNN edges for superpixel nodes (local idx R..R+N-1) ---
+            # --- Self-loops for all nodes (needed when add_self_loops=False) ---
+            all_nodes = torch.arange(N_total, device=device) + base
+            all_src.append(all_nodes)
+            all_tgt.append(all_nodes)
+            all_w.append(torch.ones(N_total, device=device))
+
+            # --- Bidirectional KNN edges for superpixel nodes ---
             src_local = torch.arange(N, device=device).view(N, 1).expand(N, k)
             tgt_local = neighbors[b]  # (N, k)
             w = 1.0 / (neighbor_dists[b].reshape(-1) + 1e-6)  # (N*k,)
 
+            # Forward edges: i → j
             all_src.append((sp_offset + src_local).reshape(-1))
             all_tgt.append((sp_offset + tgt_local).reshape(-1))
             all_w.append(w)
+            # Reverse edges: j → i (ensures symmetric connectivity)
+            all_src.append((sp_offset + tgt_local).reshape(-1))
+            all_tgt.append((sp_offset + src_local).reshape(-1))
+            all_w.append(w)
 
-            # --- Register → all superpixels (bipartite, uniform weight) ---
+            # --- Register → all superpixels (bipartite, inverse-distance) ---
             if R > 0:
                 reg_idx = torch.arange(R, device=device).view(R, 1)
                 sp_idx = torch.arange(N, device=device).view(1, N)
@@ -454,7 +529,12 @@ class GNNVision(nn.Module):
                 reg_tgt = (sp_offset + sp_idx).expand(R, N).reshape(-1)
                 all_src.append(reg_src)
                 all_tgt.append(reg_tgt)
-                all_w.append(torch.ones(R * N, device=device))
+                # Distance-decayed weights for register edges
+                reg_dists = neighbor_dists[b].mean(dim=-1)  # (N,) mean KNN dist per node
+                reg_w = (1.0 / (reg_dists + 1e-6)).unsqueeze(0).expand(R, -1).reshape(-1)
+                all_src.append(reg_tgt)
+                all_tgt.append(reg_src)
+                all_w.append(reg_w)
 
         edge_index = torch.stack(
             [torch.cat(all_src).long(), torch.cat(all_tgt).long()], dim=0
@@ -556,25 +636,31 @@ class GNNVision(nn.Module):
         x_nodes = tokens.reshape(B * tokens.shape[1], self.embed_dims)
 
         # Collect per-layer features for Jumping Knowledge if enabled.
+        # Only collect when an output index needs them (optimization for Issue 16).
+        need_jk = self.jk == "lstm" and self.jk_lstm is not None
         jk_layers: List[Tensor] = []
+        attnres_history: Optional[list] = [x_nodes] if self.use_attnres else None
         outs: List[Tensor] = []
 
         for i, block in enumerate(self.blocks):
-            x_nodes = block(x_nodes, edge_index, edge_weight, edge_attr)
+            if self.use_attnres and attnres_history is not None:
+                x_nodes = block(x_nodes, edge_index, edge_weight, edge_attr, attnres_history=attnres_history)
+                if i < len(self.blocks) - 1:
+                    attnres_history.append(x_nodes)
+            else:
+                x_nodes = block(x_nodes, edge_index, edge_weight, edge_attr)
 
-            if self.jk == "lstm":
+            if need_jk:
                 jk_layers.append(x_nodes)
 
             if i == len(self.blocks) - 1 and self.final_norm:
                 x_nodes = self.ln1(x_nodes)
 
             if i in self.out_indices:
-                if self.jk == "lstm" and self.jk_lstm is not None:
-                    # JK-LSTM: feed all collected layers through LSTM, take last hidden.
-                    # jk_layers shape: (num_layers, B*(R+N), D) → (B*(R+N), num_layers, D)
+                if need_jk and jk_layers:
                     layer_stack = torch.stack(jk_layers, dim=1)
                     lstm_out, _ = self.jk_lstm(layer_stack)
-                    x_jk = self.jk_proj(lstm_out[:, -1, :])  # last timestep
+                    x_jk = self.jk_proj(lstm_out[:, -1, :])
                 else:
                     x_jk = x_nodes
 
@@ -595,6 +681,9 @@ class GNNVision(nn.Module):
                     w_s,
                 )
                 outs.append(feat)
+
+        if self.use_attnres and attnres_history is not None:
+            self.last_attnres_history = [t.detach() for t in attnres_history]
 
         return tuple(outs)
 
@@ -626,17 +715,21 @@ def create_gnn_vision(
     spixel_backend: str = "diff_slic",
     use_cpp: bool = False,
     downsample_factor: float = 1.0,
+    knn_k: int = 4,
     gnn_conv: str = "gatv2",
     gnn_heads: int = 4,
     gnn_aggr: str = "mean",
     jk: str = "none",
+    use_attnres: bool = False,
+    attnres_gate_type: str = "bias",
+    attnres_recency_bias_init: float = 10.0,
     use_jit: bool = False,
 ) -> torch.nn.Module:
     """Create a :class:`GNNVision` model (6-channel input).
 
     Mirrors :func:`create_vision_rwkv7`'s contract so the two backbones are
-    drop-in comparable, with three GNN-specific additions
-    (``gnn_conv``, ``gnn_heads``, ``gnn_aggr``, ``jk``).
+    drop-in comparable, with GNN-specific additions
+    (``gnn_conv``, ``gnn_heads``, ``gnn_aggr``, ``jk``, ``knn_k``).
     """
     _model: torch.nn.Module = GNNVision(
         img_size=img_size,
@@ -661,9 +754,13 @@ def create_gnn_vision(
         norm_layer=norm_layer,
         act_layer=act_layer,
         spixel_backend=spixel_backend,
+        knn_k=knn_k,
         gnn_conv=gnn_conv,
         gnn_heads=gnn_heads,
         gnn_aggr=gnn_aggr,
         jk=jk,
+        use_attnres=use_attnres,
+        attnres_gate_type=attnres_gate_type,
+        attnres_recency_bias_init=attnres_recency_bias_init,
     )
     return maybe_compile(_model, use_jit=use_jit)

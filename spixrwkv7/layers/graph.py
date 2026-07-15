@@ -42,12 +42,13 @@ def q_shift_graph_multihead(
     head_dim: int = HEAD_SIZE,
     with_cls_token: bool = False,
     num_extra_tokens: int = 0,
+    num_prepend_tokens: int = 0,
 ) -> torch.Tensor:
     """Graph-based Q-Shift for superpixel or irregular grids.
-    Supports batched graphs [B, N, K] for data-dependent topologies.
 
-    Extra keyword arguments (dists, sigma) are accepted for call-site
-    compatibility but NOT used in the pure gather-based Q-shift.
+    Supports batched graphs [B, N, K] for data-dependent topologies.
+    Prepended tokens (e.g. register tokens) and appended tokens (e.g. CLS)
+    are excluded from the graph shift and passed through unchanged.
     """
     B, N_total, C = input.shape
     assert C % head_dim == 0, f"C={C} not divisible by head_dim={head_dim}"
@@ -60,6 +61,14 @@ def q_shift_graph_multihead(
     assert head_dim % K == 0, f"head_dim={head_dim} must be divisible by K={K}"
     group_size = head_dim // K
 
+    # Strip prepend tokens (register tokens)
+    prepend_tokens = None
+    if num_prepend_tokens > 0:
+        prepend_tokens = input[:, :num_prepend_tokens, :]
+        input = input[:, num_prepend_tokens:, :]
+        N_total -= num_prepend_tokens
+
+    # Strip append tokens (CLS)
     if num_extra_tokens == 0 and with_cls_token:
         num_extra_tokens = 1
 
@@ -89,7 +98,12 @@ def q_shift_graph_multihead(
     output = output * valid_mask
 
     output = output.view(B, N, C)
-    if num_extra_tokens > 0:
-        assert extra_tokens is not None
-        output = torch.cat((output, extra_tokens), dim=1)
-    return output
+
+    # Re-assemble: prepend + shifted + append
+    parts = []
+    if prepend_tokens is not None:
+        parts.append(prepend_tokens)
+    parts.append(output)
+    if extra_tokens is not None:
+        parts.append(extra_tokens)
+    return torch.cat(parts, dim=1)
