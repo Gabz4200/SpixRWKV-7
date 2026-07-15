@@ -10,26 +10,14 @@ The architecture merges the linear-complexity, constant-memory advantages of the
 
 ## News / Recent Updates
 
-- **GNN Register Token Graph Connectivity + JK-LSTM**: GNN variant now supports DINOv2-style register tokens with proper graph topology — register nodes connect to ALL superpixel nodes (bipartite), giving each superpixel `4 + R` incoming edges. Added Jumping Knowledge LSTM (`jk="lstm"`) for multi-hop feature aggregation across layers. See [GNN section](#gnn-vision-ablation).
-- **Fair benchmark with matched params**: All 4 variants (spix, vq, conv, gnn) benchmarked against ViT at matched parameter counts (~5.7M tiny, ~22M small) with 6-channel input (L, a, b, alpha, x, y) for all models. Results in [Full Benchmark section](#full-variant-benchmark-results).
-- **GNN Ablation variant**: Replaces RWKV-7 recurrence with PyTorch Geometric GNN message passing (GATv2, GCN, SAGE, GIN, etc.) over the same superpixel KNN graph. Fastest inference variant (2.8x faster than spix at small). Configs: `gnn_tiny/small/medium/large.yaml`.
-- **Conv-Stem Vision-RWKV-7 variant**: Two-stream tokenizer with strided convolutions before diffSLIC. Converges fastest (2-3 steps) but slowest inference due to deep backbone. Configs: `conv_tiny/small/medium/large.yaml`.
-- **VQ-VAE Tokenization Ablation**: Learned VQ-VAE tokenizer replaces superpixels. Discrete codebook prior provides cleaner gradients but adds significant compute overhead. Configs: `vq_tiny/small/medium/large.yaml`.
-- **Real image test data**: `data/caltech101_classification/` with 223 images (butterfly, dalmatian, dolphin). ALL scripts load real images instead of random noise.
-- **Optimized C++ kernels**: AVX2-accelerated RWKV-7 recurrence and diffSLIC kernels registered via `TORCH_LIBRARY` for `torch.compile` support. Enabled via `use_cpp=True` flag. Speedups: 1.2-1.6x across all 5 model variants (spix, conv, gnn, hybrid, vq). diffSLIC alone shows 3.5x speedup.
-- **RMSNorm + SwiGLU**: Configurable normalization and activation across all variants.
-- **Full benchmark suite**: `scripts/run_full_benchmark.py` — inference speed + training convergence for all 4 variants vs ViT.
-+ **Architectural Enhancements (RMSNorm & SwiGLU)**: Added support for configurable normalization layers (`norm_layer="layernorm"|"rmsnorm"`) and activation functions (`act_layer="relu2"|"gelu"|"silu"|"swiglu"`) across the backbone, blocks, spatial/channel mixers, and classification head. RMSNorm and SwiGLU activations are inspired by modern vision/language architectures like DINOv3 and LLaMA, providing greater parameter efficiency and expressive capacity.
-+ **Registers (DINOv2-style)**: Optional learnable register tokens prepended to the token sequence, allowing global context accumulation independent of superpixel representation. Enable with `register_tokens=N`.
-- **Dynamic Image Size Support**: `img_size` means target **height** in pixels, preserving aspect ratio. `img_size=-1` keeps original resolution. Positive values scale height to that pixel count; width is computed from the image’s aspect ratio.
-
-- **RMSNorm + SwiGLU Validation Complete**: Comprehensive evaluation of the new normalization/activation options shows stable convergence, deterministic behavior, and no NaN/Inf outputs. Full-batch overfit achieved in 17 steps with tiny config (64x64, 128 dims, 36 superpixels). Models under 3M params require structured shuffle (buffer=100) for stable training. See [RMSNorm + SwiGLU Results](#rmsnorm--swiglu-validation-results) for details.
-- **Conv-Stem Vision-RWKV-7 variant**: Added `ConvolutionalVision_RWKV7` — a two-stream tokenizer that stacks strided convolutions (replacing the first 4× spatial reduction) before diffSLIC superpixel clustering. Conv stem learns semantically meaningful feature maps, pooling tokens from conv features rather than raw pixel space. Configs: `conv_tiny/small/medium/large.yaml`. Integrated across all scripts (`--model-type conv`), all tests pass (126/126). See [Conv-Stem section](#conv-stem-vision-rwkv-7) for details.
-- **GNN Ablation variant**: Added `GNNVision` — replaces the RWKV-7 recurrence with PyTorch Geometric GNN message passing (GATv2, GCN, SAGE, GIN, TransformerConv, etc.) over the same superpixel KNN graph. Clean ablation isolating "how much of performance comes from GNN message passing vs. recurrent delta-rule scan." Configs: `gnn_tiny/small/medium/large.yaml`. Fastest inference variant on CPU (2-3x faster than spix). See [GNN section](#gnn-vision-ablation) for details.
-- **Real image test data**: Added `data/caltech101_classification/` with 223 images across 3 classes (butterfly, dalmatian, dolphin). ALL test and benchmark scripts now load real images instead of random noise, ensuring superpixel-sensitive models are evaluated on perceptually meaningful data. Shared utility: `spixrwkv7/data/image_utils.py`.
-- **Full 4-variant benchmark suite**: Comprehensive benchmark comparing spix, vq, conv, gnn at tiny/small configurations against ViT baseline. Covers inference speed (with tokenizer/backbone breakdown) and training convergence. Runner: `scripts/run_full_benchmark.py`. See [Full Benchmark section](#full-variant-benchmark-results) for results.
-- **Test Validity Documentation**: The repo now documents what each test script validates vs what data volume it needs for meaningful conclusions. See [Test Validity section](#test-validity--data-volume-guidelines).
-- **Deep Codebase Cleanup (commit e9caf86)**: Removed all dead code — 7 unused sigma params from all forward signatures, `hilbertcurve` dependency (replaced with native vectorized sort), Q4_0/Q5_1 quantization stubs, dead C++ kernel parameters (`k`, `r_k`, `n_extra_back`), dead `c_p` gather parameter, unused `S` state variables, and `pos_grid_size`/`pos_embed` in the backbone forward. Fixed 4 bugs (`r_k` `NameError`, `ln0` bypass never applied, dead `c_p` gather always masking, unused `S` variables shadowing). Cleaned C++ kernel signatures (state made `const`, removed stale args, `-fno-lto` build flag). Ruff-clean (0 errors), 126/126 tests pass. See [commit e9caf86](https://github.com/Gabz4200/SpixRWKV7/commit/e9caf86ea57587f007c57e5626444dfe60945c9b) for full diff.
+- **Hybrid RWKV+GNN Vision variant**: New `HybridVision` model combining ConvStem + diffSLIC tokenizer, a configurable number of RWKV-7 recurrent layers, and GATv2 GNN layers with DINOv2 register tokens and JK-LSTM. Bridges the recurrence vs message-passing ablation. Configs: `hybrid_tiny/small/medium/large.yaml`.
+- **5-variant full benchmark**: Comprehensive benchmark comparing spix, vq, conv, gnn, hybrid against ViT at matched parameter counts. Inference speed (with tokenizer/backbone breakdown) and training convergence. GNN is fastest RWKV variant (0.55x vs ViT at tiny/512px); conv converges fastest (6 steps). See [Full Benchmark section](#full-variant-benchmark-results).
+- **Attention Residuals (AttnRes) across all models**: Depth-wise attention residuals replacing fixed additive residual accumulation with learned softmax attention over preceding layer representations. Wired through all models including hybrid. Features `"block"` and `"full"` history modes, multiple gating options (`"bias"`, `"sigmoid_scalar"`, `"sigmoid_vector"`, `"learnable_alpha"`).
+- **Residual connections**: All models now have at least one method of residual connections (Attention Residuals as primary, Sum Residuals as secondary). Hybrid model wires attnres through both RWKV and GNN blocks with consistent 3D history format.
+- **GNN edge bug fixes**: Fixed missing `all_w.append(reg_w)` for forward register edges (edge_index/edge_weight mismatch), double-scaling on backward register edges, and `_gnn_forward` not passing `edge_attr` to GATv2/TransformerConv. Added `edge_dim=1` and `add_self_loops=False` for GATv2Conv.
+- **GNN over-smoothing prevention**: GNN depth reduced for small node counts (gnn_tiny: 6→3, gnn_small: 15→8). Added `register_edge_weight_scale` to dampen register hub domination (0.25 for tiny, 0.5 for small+). Global attention layers added at middle and end of GNN stack.
+- **C++ kernel fixes**: Lazy `_ensure_cpp()` import, autograd auto-fallback to PyTorch, `torch::empty_like` for state buffers, dynamic shared memory for diffSLIC `s_valid_idx`, `std::vector` for diffSLIC `sim_buf`. All 131 tests pass.
+- **Full benchmark suite**: `scripts/run_full_benchmark.py` — inference speed + training convergence for all 5 variants vs ViT.
 
 ## Key Features
 
@@ -42,7 +30,8 @@ The architecture merges the linear-complexity, constant-memory advantages of the
 - **Conv-Stem Tokenization**: A two-stream tokenizer alternative (`ConvolutionalSuperpixelTokenizer`) that stacks learnable strided convolutions before diffSLIC clustering. The raw image is spatially downsampled to match conv feature resolution, then superpixel masks from the semantic stream are used to pool the conv feature stream into tokens. This decouples the spatial reduction (learned via conv) from the grouping criteria (semantic via diffSLIC on raw pixels). Model: `ConvolutionalVision_RWKV7`, builder: `create_conv_vision_rwkv7`.
 - **VQ-VAE Tokenization Ablation (VQ_RWKV7)**: A sibling model alternative (`VQ_RWKV7`) that replaces superpixels with learned VQ-VAE codebook representations. It downsamples the image via a Convolutional VQ-VAE encoder to a regular grid of latent features, maps them to the nearest codebook embeddings (with straight-through gradients), and feeds these quantized token embeddings to the RWKV-7 recurrent blocks.
 - **GNN Ablation (GNNVision)**: Replaces the RWKV-7 recurrence with PyTorch Geometric graph neural network layers over the same superpixel KNN graph. Register tokens (DINOv2-style) connect bipartitely to all superpixel nodes, giving each superpixel `4 + R` edges. Supports Jumping Knowledge LSTM (`jk="lstm"`) for multi-layer feature aggregation. 9 GNN convolution types: GCN, GraphConv, SAGE, GIN, GAT, GATv2, TransformerConv, ResGatedGraphConv, and GatedGraphConv. Builder: `create_gnn_vision`. Configs: `gnn_tiny/small/medium/large.yaml`.
-- **Attention Residuals (AttnRes)**: Depth-wise attention residuals replacing the standard fixed additive residual accumulation with a learned softmax attention over preceding layer/block representations. Features options for `"block"` and `"full"` history aggregation, and multiple gating options (`"bias"`, `"sigmoid_scalar"`, `"sigmoid_vector"`, `"learnable_alpha"`).
+- **Hybrid RWKV+GNN (HybridVision)**: Combines ConvStem tokenizer, configurable RWKV-7 recurrent layers, and GATv2 GNN layers with DINOv2 register tokens and JK-LSTM. Bridges the recurrence vs message-passing ablation — RWKV handles sequential processing, GNN handles graph structure. Builder: `create_hybrid_vision`. Configs: `hybrid_tiny/small/medium/large.yaml`.
+- **Attention Residuals (AttnRes)**: Depth-wise attention residuals replacing the standard fixed additive residual accumulation with a learned softmax attention over preceding layer/block representations. Features options for `"block"` and `"full"` history aggregation, and multiple gating options (`"bias"`, `"sigmoid_scalar"`, `"sigmoid_vector"`, `"learnable_alpha"`). All models now have at least one method of residual connections (AttnRes as primary, Sum Residuals as secondary).
 - **Perceptual Color Space Support**: Native, differentiable support for the **OkLAB** color space, including sRGB/Linear RGB conversions, alpha channel, and robust **Gamut Clipping** methods. At least until now, the Gamut Clipping is only implemented as a utility and not integrated into the training pipeline, but it is available for experimentation and also for cliping outputs on generative tasks.
 - **Graph-Based Q-Shift**: Adapts the original 2D grid Q-Shift to operate on K-Nearest Neighbor (KNN) graphs over irregular superpixel centroids, enabling spatial mixing that adapts to arbitrary topologies.
 - **Bidirectional RWKV-7 Recurrence**: Two independent `RecurrentScan` modules (forward and backward) process the token sequence, fused via a learned dynamic gate. Each scan implements RWKV-7's generalized delta rule with decoupled keys, value residual, and learnable decay.
@@ -58,22 +47,35 @@ The architecture merges the linear-complexity, constant-memory advantages of the
 
 ### Speed Comparison (CPU)
 
-Benchmark comparing Vision RWKV-7 (RMSNorm + SwiGLU activation, C++ optimized kernels) against a standard ViT implementation across model sizes and image resolutions.
+Benchmark comparing all 5 SpixRWKV-7 variants against ViT across model sizes and image resolutions. C++ kernels enabled where applicable.
 
 #### Model Size Comparison (matched params, 256px input, 6-channel input)
 
-| Size   | RWKV-7 Time (ms) | ViT Time (ms) | Speedup (ViT/RWKV-7) | RWKV-7 Params | ViT Params |
-| :---   | :---             | :---          | :---                 | :---          | :---       |
-| tiny   | 462              | 53            | 0.11x                | 5.86M         | 5.69M      |
-| small  | 2992             | 147           | 0.05x                | 21.73M        | 21.99M     |
+| Size | Model | Params | Time (ms) | vs ViT | Tok % |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| tiny | spix | 5.90M | 417 | 0.13x | 61% |
+| tiny | vq | 5.39M | 709 | 0.08x | 16% |
+| tiny | conv | 5.70M | 372 | 0.15x | 4% |
+| tiny | gnn | 4.49M | 140 | 0.39x | 66% |
+| tiny | hybrid | 3.62M | 228 | 0.24x | 33% |
+| tiny | ViT | 5.69M | 55 | 1.00x | 0% |
+| small | spix | 21.96M | 2686 | 0.05x | 12% |
+| small | vq | 21.54M | 2384 | 0.06x | 9% |
+| small | conv | 21.99M | 3236 | 0.04x | 1% |
+| small | gnn | 14.19M | 571 | 0.25x | 33% |
+| small | hybrid | 20.66M | 965 | 0.15x | 24% |
+| small | ViT | 21.99M | 140 | 1.00x | 0% |
 
-#### Resolution Sweep (Small Model, config: embed_dims=320, depth=11, num_heads=5)
+#### Resolution Scaling (Tiny Model, 256px vs 512px)
 
-| Img Size | RWKV-7 Time (ms) | ViT Time (ms) | Speedup (ViT/RWKV-7) | Tokenizer % |
-| :---     | :---             | :---          | :---                 | :---        |
-| 64       | 1214.23          | 21.79         | 0.02x                | 3.1%        |
-| 128      | 1259.84          | 46.78         | 0.04x                | 6.4%        |
-| 224      | 1404.21          | 126.29        | 0.09x                | 16.0%       |
+| Model | 256px (ms) | 512px (ms) | Scaling | Tok @ 512px |
+| :--- | :--- | :--- | :--- | :--- |
+| spix | 417 | 1433 | 3.4x | 81% |
+| vq | 709 | 3079 | 4.3x | 18% |
+| conv | 372 | 579 | 1.6x | 8% |
+| gnn | 140 | 494 | 3.5x | 77% |
+| hybrid | 228 | 712 | 3.1x | 41% |
+| ViT | 55 | 273 | 5.0x | 0% |
 
 #### Memory Comparison
 
@@ -92,10 +94,11 @@ Based on CPU benchmarks and training experiments, here is a detailed analysis of
 * **SpixRWKV-7**: Employs **diffSLIC** to group pixels into irregular, perceptually coherent regions (superpixels). This provides a native boundary-aware representation. Graph-based spatial mixing (`q_shift_graph_multihead`) and Hilbert sequence reordering preserve local and non-local geometry.
 
 #### 2. Computational Complexity & Latency
-* **Theoretical Complexity**: ViT attention scales quadratically ($O(N^2)$) in time and memory with the number of tokens $N$. SpixRWKV-7's recurrent scan has a linear ($O(N)$) time complexity and constant ($O(1)$) recurrent state memory.
+* **Theoretical Complexity**: ViT attention scales quadratically ($O(N^2)$) in time and memory with the number of tokens $N$. SpixRWKV-7's recurrent scan has a linear ($O(N)$) time complexity and constant ($O(1)$) recurrent state memory. GNN scales with graph size ($O(S^2)$ for $S$ superpixels), independent of pixel count.
 * **CPU Latency & Parallelization Bottleneck**: On CPU, PyTorch's native transformer uses highly tuned, parallelized CPU matrix multiplication (GEMM) kernels. In contrast, SpixRWKV-7's recurrent scan operates sequentially over the sequence length (`for t in range(N)`), introducing significant loop overhead and poor CPU cache efficiency.
-* **Fair Comparison (Matched Params)**: At ~5.7M params (tiny), ViT is **8x faster** than spix. At ~22M params (small), ViT is **14x faster**. The gap widens with scale because deeper RWKV backbones have more sequential steps.
-* **Tokenizer Overhead**: For spix, diffSLIC accounts for **63%** of tiny inference time but only **12%** at small scale (deeper backbone dominates). For gnn, tokenizer is **69%** at tiny but **~0%** at small (backbone dominates).
+* **Fair Comparison (Matched Params)**: At ~5.7M params (tiny, 256px), ViT is **4-8x faster** than RWKV variants. The gap is smallest for gnn (0.39x) and largest for vq (0.08x). At ~22M params (small, 256px), ViT is **4-20x faster**.
+* **Tokenizer Overhead**: For spix, diffSLIC accounts for **61-81%** of inference time depending on resolution. For gnn, tokenizer is **66-77%**. For conv, tokenizer is only **1-8%** (ConvStem is fast). The hybrid model splits this 33-42%.
+* **Resolution Scaling**: GNN scales best with resolution (0.39x → 0.55x vs ViT from 256px to 512px) because graph computation scales with S, not N. Conv also scales well (0.15x → 0.47x). Spix tokenizer grows with pixel count.
 
 #### 3. Parameter and Memory Efficiency
 * **Parameter Count (Matched)**: At matched parameter counts, the architectures show their true character:
@@ -104,32 +107,34 @@ Based on CPU benchmarks and training experiments, here is a detailed analysis of
 * **Memory Footprint**: Under high-resolution or dense-prediction settings, the quadratic memory scaling of ViT attention becomes a bottleneck. SpixRWKV-7 scales linearly and retains a constant state size, preserving memory.
 
 #### 4. Convergence & Stability
-* **Fair Comparison (Matched Params)**: At matched parameter counts:
-  * **Conv** converges fastest: 4 steps to 100% (conv stem provides strong inductive bias)
-  * **VQ** converges moderate: 35 steps (VQ-VAE tokenizer overhead but steady)
-  * **Spix** converges moderate: 37 steps (sequential bottleneck, 3.9s/step)
-  * **GNN** converges in 75 steps (learns from scratch, but fastest per-step at 1.7s)
+* **Fair Comparison (Matched Params)**: At matched parameter counts (256px, 4 real images):
+  * **Conv** converges fastest: 6 steps to 100% (conv stem provides strong inductive bias)
+  * **VQ** converges moderate: 26 steps (VQ-VAE tokenizer overhead but steady)
+  * **GNN** converges in 40 steps (learns from scratch, but fastest per-step at 1.8s)
+  * **Spix** converges moderate: 44 steps (sequential bottleneck, 4.3s/step)
 * **GNN step count is not a problem**: Conv pre-extracts spatial features before tokenization; GNN must learn both features and message-passing patterns. On real datasets, GNN's per-step speed advantage dominates.
 * **Register tokens + JK-LSTM improve GNN convergence**: Ablation shows registers save 3 steps, JK-LSTM saves 8 steps, together save 13 steps.
+* **Overfit caveat**: Fast overfitting (conv's 6 steps) means high capacity + easy gradient flow, but may also overfit faster on real data. Slow overfitting (spix's 44 steps) suggests more structured learning that may generalize better.
 * Gradient health diagnostics confirm uniform gradient flow across all blocks under RMSNorm and SwiGLU activation configurations.
 
 ### Why Is ViT Faster on CPU?
 
 1. **Optimized GEMM kernels**: PyTorch's Transformer uses heavily tuned CPU matrix multiplication that exploits cache locality and SIMD instructions.
 2. **Parallel vs Sequential**: The Vision RWKV-7 backbone has a sequential recurrent loop (`for t in range(N)`) that cannot be vectorized like the parallel attention in ViT. Each timestep requires its own forward pass through the recurrence.
-3. **diffSLIC overhead**: The tokenization involves iterative clustering with softmax operations over spatial dimensions - computationally expensive on CPU.
+3. **diffSLIC overhead**: The tokenization involves iterative clustering with softmax operations over spatial dimensions - computationally expensive on CPU. For spix, this is 61-81% of total time.
 4. **Small matrix inefficiency**: The RWKV-7 recurrence uses small matrix operations (head_size=64) that have poor cache efficiency compared to larger GEMM operations.
-5. **GPU advantage for RWKV-7**: On GPU, the recurrent loop can run in parallel across sequence positions using the custom CUDA kernel without quadratic attention memory overhead.
+5. **GPU advantage for RWKV-7**: On GPU, the recurrent loop can run in parallel across sequence positions using the custom CUDA kernel without quadratic attention memory overhead. The tokenizer (diffSLIC) also has CUDA kernels.
+6. **GNN avoids the sequential bottleneck**: GATv2 message passing over the KNN graph is embarrassingly parallel, which is why gnn is 3-10x faster than other RWKV variants on CPU.
 
 ### Key Insights (Fair Comparison)
 
-- **ViT dominates CPU inference**: 2.8-30x faster than RWKV variants at matched params. PyTorch's GEMM kernels are heavily optimized for CPU, while RWKV-7's sequential recurrence cannot vectorize.
-- **GNN is the fastest RWKV variant**: 3-10x faster than other RWKV variants. GATv2 message passing over 4-NN graph is embarrassingly parallel, avoiding the sequential bottleneck of RWKV-7's recurrence.
-- **Conv converges instantly but runs slowest**: 4 steps to 100% accuracy, but the deep backbone makes inference 30x slower than ViT. Strong inductive bias enables fast memorization but constrains representational capacity.
-- **GNN convergence is not a problem**: 75 steps vs conv's 4 is expected — GNN learns features and message-passing from scratch, while conv pre-extracts spatial features. On real datasets, GNN's per-step speed (1.7s vs 3.6s) dominates.
-- **Register tokens + JK-LSTM help GNN converge**: Ablation shows registers save 3 steps, JK-LSTM saves 8 steps, and together they save 13 steps. Registers provide global context; JK-LSTM mitigates oversmoothing.
-- **VQ is expensive**: Both inference and training are slowest due to VQ-VAE encoder/decoder overhead.
-- **GPU advantage for RWKV-7**: On GPU, the recurrent loop can parallelize across sequence positions using CUDA kernels, potentially closing the gap with ViT.
+- **ViT dominates CPU inference**: 2-19x faster than RWKV variants at matched params. PyTorch's GEMM kernels are heavily optimized for CPU, while RWKV-7's sequential recurrence cannot vectorize.
+- **GNN is the fastest RWKV variant**: 3-10x faster than other RWKV variants. GATv2 message passing over 4-NN graph is embarrassingly parallel, avoiding the sequential bottleneck of RWKV-7's recurrence. Scales best with model size.
+- **Hybrid is second-fastest**: Combines conv stem (fast tokenizer) + GNN layers (fast backbone). 2.8x faster than spix at small.
+- **Conv converges instantly but scales poorly**: 6 steps to 100% accuracy, but the deep backbone makes small inference 23x slower than ViT. Strong inductive bias enables fast memorization but constrains representational capacity.
+- **Resolution scaling favors GNN/conv**: GNN improves from 0.39x to 0.55x vs ViT when going from 256px to 512px (graph scales with S, not pixels). Conv improves from 0.15x to 0.47x.
+- **VQ is expensive**: Both inference and training are slowest due to VQ-VAE encoder/decoder overhead and codebook bottleneck.
+- **GPU would change the ranking**: On GPU, diffSLIC CUDA kernels would drop tokenizer from ~250ms to ~10ms, making spix/gnn competitive with ViT.
 
 Run your own comparison (supports `--model-type {spix,conv,vq,gnn}`):
 ```bash
@@ -146,7 +151,7 @@ uv run python scripts/compare_architectures.py --model-type gnn --runs 3
 uv run python scripts/compare_architectures.py --compare-variants spix conv vq gnn --sizes tiny small
 uv run python scripts/compare_architectures_alt_vit.py --compare-variants spix conv vq gnn --sizes tiny small
 
-# Full benchmark suite (inference + training convergence)
+# Full benchmark suite (inference + training convergence for all 5 variants)
 uv run python scripts/run_full_benchmark.py --sizes tiny small --img-size 256
 
 # Sweep downsampling factors (spix backbone only)
@@ -188,33 +193,59 @@ Run the benchmark:
 uv run python scripts/benchmark_cpp_vs_py.py
 ```
 
-### Full 4-Variant Benchmark Results
+### Full 5-Variant Benchmark Results
 
-Comprehensive benchmark comparing all 4 model variants (spix, vq, conv, gnn) against ViT baseline, using **real images** from `data/caltech101_classification/` (butterfly, dalmatian, dolphin) with **matched parameter counts** and **6-channel input (L, a, b, alpha, x, y)** for all models. Both GNN and ViT use 4 register tokens (DINOv2-style) for fair comparison.
+Comprehensive benchmark comparing all 5 model variants (spix, vq, conv, gnn, hybrid) against ViT baseline, using **real images** from `data/caltech101_classification/` (butterfly, dalmatian, dolphin) with **6-channel input (L, a, b, alpha, x, y)** for all models. Both GNN, hybrid, and ViT use 4 register tokens (DINOv2-style) for fair comparison. C++ kernels enabled where applicable.
 
-#### Inference Speed (256px input, CPU, matched params)
+#### Inference Speed — Tiny (~5.7M params)
 
-| Model | Params | Total (ms) | Tokenizer (ms) | Backbone (ms) | vs ViT |
+| Model | Params | Total (ms) | Tokenizer (ms) | Backbone (ms) | Tok % | vs ViT |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **spix** | 5.90M | 417 | 252 | 165 | 61% | 0.13x |
+| **vq** | 5.39M | 709 | 113 | 596 | 16% | 0.08x |
+| **conv** | 5.70M | 372 | 14 | 358 | 4% | 0.15x |
+| **gnn** | 4.49M | 140 | 92 | 48 | 66% | 0.39x |
+| **hybrid** | 3.62M | 228 | 75 | 153 | 33% | 0.24x |
+| **ViT** | 5.69M | 55 | — | 55 | 0% | 1.00x |
+
+#### Inference Speed — Tiny at 512px (resolution scaling)
+
+| Model | Total (ms) | Tokenizer (ms) | Backbone (ms) | Tok % | vs ViT |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **spix** tiny | 5.86M | 462 | 291 (63%) | 171 | 0.11x |
-| **vq** tiny | 5.43M | 1009 | 114 (11%) | 895 | 0.05x |
-| **conv** tiny | 5.61M | 514 | 16 (3%) | 497 | 0.10x |
-| **gnn** tiny | 5.68M | 146 | 101 (69%) | 45 | 0.36x |
-| **ViT** tiny | 5.69M | 53 | — | 53 | 1.00x |
-| **spix** small | 21.73M | 2992 | 363 (12%) | 2597 | 0.05x |
-| **vq** small | 22.00M | 3530 | 210 (6%) | 3315 | 0.04x |
-| **conv** small | 21.73M | 4596 | — | 4596 | 0.03x |
-| **gnn** small | 21.78M | 444 | — | 444 | 0.33x |
-| **ViT** small | 21.99M | 147 | — | 147 | 1.00x |
+| **spix** | 1433 | 1161 | 272 | 81% | 0.19x |
+| **vq** | 3079 | 568 | 2511 | 18% | 0.09x |
+| **conv** | 579 | 46 | 532 | 8% | 0.47x |
+| **gnn** | 494 | 378 | 116 | 77% | 0.55x |
+| **hybrid** | 712 | 289 | 423 | 41% | 0.37x |
+| **ViT** | 273 | — | 273 | 0% | 1.00x |
 
-#### Training Convergence (single-batch overfit, 256px, matched params)
+#### Inference Speed — Small (~22M params)
 
-| Model | Steps to 100% | Total Time | Step Time |
-| :--- | :--- | :--- | :--- |
-| **conv** tiny | 4 | 14.6s | 3.6s |
-| **vq** tiny | 35 | 371.5s | 10.6s |
-| **spix** tiny | 37 | 142.7s | 3.9s |
-| **gnn** tiny | 75 | 129.3s | 1.7s |
+| Model | Params | Total (ms) | Tokenizer (ms) | Backbone (ms) | Tok % | vs ViT |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **spix** | 21.96M | 2686 | 334 | 2352 | 12% | 0.05x |
+| **vq** | 21.54M | 2384 | 223 | 2161 | 9% | 0.06x |
+| **conv** | 21.99M | 3236 | 24 | 3212 | 1% | 0.04x |
+| **gnn** | 14.19M | 571 | 191 | 380 | 33% | 0.25x |
+| **hybrid** | 20.66M | 965 | 228 | 737 | 24% | 0.15x |
+| **ViT** | 21.99M | 140 | — | 140 | 0% | 1.00x |
+
+#### Speedup Summary vs ViT
+
+| Size | spix | vq | conv | gnn | hybrid |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **tiny (256px)** | 0.13x | 0.08x | 0.15x | 0.39x | 0.24x |
+| **tiny (512px)** | 0.19x | 0.09x | 0.47x | 0.55x | 0.37x |
+| **small (256px)** | 0.05x | 0.06x | 0.04x | 0.25x | 0.15x |
+
+#### Training Convergence (single-batch overfit, 256px, 4 real images)
+
+| Model | Steps to 100% | Step Time | Total Time | Final Loss |
+| :--- | :--- | :--- | :--- | :--- |
+| **conv** tiny | 6 | 2747ms | 16.5s | 0.503 |
+| **vq** tiny | 26 | 9670ms | 251.4s | 6.050 |
+| **gnn** tiny | 40 | 1846ms | 73.8s | 0.405 |
+| **spix** tiny | 44 | 4279ms | 188.3s | 0.326 |
 
 #### GNN Ablation: Registers vs JK-LSTM
 
@@ -233,30 +264,38 @@ To isolate the effect of each GNN enhancement, we ran a 4-way ablation on the ti
 - **The two features are complementary** (75 → 62 steps together). JK-LSTM benefits from register tokens because registers provide a global "summary" signal that the LSTM can use to decide when to trust deep vs shallow features.
 - **Cost is negligible**: JK-LSTM adds 590K params (LSTM + projection). Per-step time barely changes (~1.75s → ~1.80s).
 
-#### Key Insights (Fair Comparison with Matched Params)
+#### Key Insights
 
-1. **ViT dominates inference on CPU** (2.8-24x faster) — At matched parameter counts, ViT's optimized parallel GEMM kernels are dramatically faster than any RWKV variant. The gap is smallest for gnn (2.8x at small) and largest for conv (30x at small).
+1. **The superpixel tokenizer is the dominant bottleneck** — For spix and gnn, diffSLIC takes 61-81% of total inference time at tiny. At 512px, spix tokenizer jumps from 252ms to 1161ms (4.6x) because diffSLIC is O(pixels × k × neighbors). The recurrent backbone itself is fast; the bottleneck is the segmentation frontend. On GPU (diffSLIC CUDA kernels), this would improve dramatically.
 
-2. **GNN is the fastest RWKV variant** — 146ms (tiny) / 444ms (small), 3-10x faster than other RWKV variants. GATv2 message passing over 4-NN graph is embarrassingly parallel, avoiding the sequential bottleneck of RWKV-7's recurrence.
+2. **ViT dominates CPU inference** (2-19x faster) — ViT has no tokenizer — just a single Conv2d patch embedding (parallel, highly optimized by PyTorch) then transformer blocks. At matched params, ViT's optimized parallel GEMM kernels are dramatically faster. But ViT treats every patch equally; RWKV variants use superpixels to adaptively allocate tokens to informative regions — a **quality** tradeoff.
 
-3. **diffSLIC tokenization dominates spix/gnn** — 63-69% of inference time is tokenizer for tiny models. At small scale, spix's backbone dominates (87%) because the deeper model (15 layers) processes more tokens sequentially.
+3. **GNN is the fastest RWKV variant** — 140ms (tiny/256px) / 571ms (small/256px), 3-10x faster than other RWKV variants. GATv2 message passing over 4-NN graph is embarrassingly parallel, avoiding the sequential bottleneck of RWKV-7's recurrence. GNN scales best with model size: backbone is 8.5x faster than conv at small (380ms vs 3212ms) because graph computation scales with number of superpixels (S), not pixel count (N).
 
-4. **Conv converges fastest but runs slowest** — 4 steps to 100% accuracy. The conv stem provides strong inductive bias that makes features immediately linearly separable. However, the deep backbone makes inference 30x slower than ViT. This is a classic speed-accuracy tradeoff: the same inductive bias that enables instant convergence constrains what the model can learn.
+4. **Resolution scaling reveals architecture character** — At 512px vs 256px:
+   - GNN improves from 0.39x to 0.55x vs ViT (graph scales with S, not pixels)
+   - Conv improves from 0.15x to 0.47x (backbone dominates, tokenizer is tiny)
+   - Spix degrades from 0.13x to 0.19x (tokenizer grows with pixels)
+   - This suggests GNN and conv are better suited for high-resolution inputs
 
-5. **GNN convergence step count is not a problem** — GNN takes 75 steps vs conv's 4, but this is expected: GNN must learn both features and message-passing patterns from scratch, while conv pre-extracts spatial features before tokenization. On real datasets with proper regularization, GNN's per-step speed advantage (1.7s vs 3.6s) dominates.
+5. **Hybrid combines best of both** — Uses conv stem (fast tokenizer: 75ms, 33% of time) + GNN layers (fast backbone: 153ms). Second-fastest RWKV variant at tiny (228ms). At small (965ms), hybrid is 2.8x faster than spix (2686ms) and 3.4x faster than conv (3236ms).
 
-6. **VQ is slowest in both inference and training** — The VQ-VAE encoder/decoder adds significant compute overhead. At small, VQ takes 35 steps and 372s total.
+6. **Conv converges fastest but runs slowest at scale** — 6 steps to 100% accuracy. The conv stem provides strong inductive bias that makes features immediately linearly separable. But at small, conv's backbone dominates (3212ms) because the deep recurrent layers process many tokens sequentially. Classic speed-accuracy tradeoff.
 
-7. **Parameter efficiency at matched counts** — When given the same parameter budget, the architectures show their true character:
-   - ViT: fastest inference (53ms tiny, 147ms small), moderate convergence
-   - GNN: fastest RWKV inference (146ms tiny, 444ms small), fastest per-step training (1.7s)
-   - Spix: moderate inference (462ms tiny, 2992ms small), moderate training (3.9s/step)
-   - Conv: slow inference (514ms tiny, 4596ms small), fastest convergence (4 steps)
-   - VQ: slowest in both inference (1009ms tiny) and convergence (35 steps, 10.6s/step)
+7. **VQ is slowest in both inference and training** — The VQ-VAE codebook (1024 entries) creates a representation bottleneck. At tiny, VQ backbone is 3.6x slower than spix (596ms vs 165ms). High final loss (6.05) suggests the codebook fights the classification objective — 1024 entries for 3 classes is overkill.
+
+8. **Training convergence reflects memorization, not generalization** — All models hit 100% on 4 training images (expected for overfit). Conv's 6 steps means high capacity + easy gradient flow; spix's 44 steps suggests more structured learning. Fast overfitting ≠ good generalization — conv may overfit faster on real data too.
+
+9. **GPU would change the ranking entirely** — On GPU, spix tokenizer drops from 252ms to ~10ms (CUDA kernels), GNN from 92ms to ~5ms. The recurrent backbone (the novel contribution) is actually very fast. CPU benchmark underestimates RWKV variants' potential because superpixel tokenizers are CPU-bound.
+
+10. **Predicted generalization ranking on real training**:
+    - **Best**: GNN and Hybrid — graph structure enforces spatial coherence; hybrid combines local texture + global structure
+    - **Middle**: SPIX — superpixel segmentation provides spatial inductive bias, but recurrent backbone may not fully exploit it
+    - **Worst**: Conv and VQ — conv is standard CNN+RNN with no special spatial bias; VQ's codebook bottleneck constrains representation
 
 Run the full benchmark:
 ```bash
-# Full inference + training convergence for all variants
+# Full inference + training convergence for all 5 variants
 uv run python scripts/run_full_benchmark.py --sizes tiny small --img-size 256
 
 # Inference only (faster)
@@ -264,6 +303,9 @@ uv run python scripts/run_full_benchmark.py --sizes tiny small --skip-training
 
 # Training convergence only
 uv run python scripts/run_full_benchmark.py --sizes tiny small --skip-inference
+
+# Custom resolution
+uv run python scripts/run_full_benchmark.py --sizes tiny --img-size 512 --warmup 3 --runs 10
 ```
 
 ### Tokenizer Downsampling Ablation (df = 1.0 / 2.0 / 4.0)
@@ -294,19 +336,19 @@ The architecture was validated using a two-step ladder: first a single-batch ove
 
 At matched parameter counts (~5.7M tiny, ~22M small), all variants converge to 100% accuracy:
 
-| Variant | Tiny Steps | Tiny Time | Small Steps | Small Time |
-| :--- | :--- | :--- | :--- | :--- |
-| conv | 4 | 14.6s | — | — |
-| gnn | 75 | 129.3s | — | — |
-| spix | 37 | 142.7s | — | — |
-| vq | 35 | 371.5s | — | — |
+| Variant | Tiny Steps | Tiny Time | Tiny Step Time |
+| :--- | :--- | :--- | :--- |
+| conv | 6 | 16.5s | 2747ms |
+| vq | 26 | 251.4s | 9670ms |
+| gnn | 40 | 73.8s | 1846ms |
+| spix | 44 | 188.3s | 4279ms |
 
 **Key findings**:
-- Conv converges fastest (4 steps) due to strong inductive bias from conv stem
-- GNN converges well (75 steps) — per-step time is fastest (1.7s) due to parallel message passing
-- Spix converges in 37 steps — sequential bottleneck makes per-step time 2.3x slower than GNN
-- VQ converges in 35 steps but is slowest per-step (10.6s) due to VQ-VAE encoder/decoder
-- GNN's higher step count is not a problem: it learns features from scratch while conv pre-extracts them
+- Conv converges fastest (6 steps) due to strong inductive bias from conv stem
+- GNN converges well (40 steps) — per-step time is fastest (1846ms) due to parallel message passing
+- Spix converges in 44 steps — sequential bottleneck makes per-step time 2.3x slower than GNN
+- VQ converges in 26 steps but is slowest per-step (9670ms) due to VQ-VAE encoder/decoder and codebook overhead
+- **Overfit caveat**: This measures memorization speed, NOT generalization. Fast overfitting (conv's 6 steps) means high capacity + easy gradient flow — but may also overfit faster on real data. Slow overfitting (spix's 44 steps) suggests more structured learning.
 
 ### LR Sensitivity Sweep
 
@@ -508,7 +550,8 @@ VisualRWKV7_Pytorch/
 │   │   ├── spixrwkv7.py         # Backbone + all modules (PyTorch implementation)
 │   │   ├── conv_spixrwkv7.py    # Conv-Stem Vision-RWKV-7 variant
 │   │   ├── vq_rwkv7.py          # VQ-RWKV-7 model (VQ-VAE tokenization ablation)
-│   │   └── gnn_spixrwkv7.py     # GNN Vision model (GNN message passing ablation)
+│   │   ├── gnn_spixrwkv7.py     # GNN Vision model (GNN message passing ablation)
+│   │   └── hybrid_spixrwkv7.py  # Hybrid RWKV+GNN model (recurrence + graph)
 │   ├── data/
 │   │   ├── colors.py            # OkLAB/sRGB conversion utilities
 │   │   ├── gamut.py             # OkLAB gamut clipping methods
@@ -551,7 +594,7 @@ VisualRWKV7_Pytorch/
 │   ├── demo.py                    # Demo / verification script
 │   ├── compare_architectures.py   # Vision RWKV-7 vs ViT speed comparison
 │   ├── compare_architectures_alt_vit.py  # Alt ViT (einops/sincos) comparison
-│   └── run_full_benchmark.py      # Full 4-variant benchmark suite
+│   └── run_full_benchmark.py      # Full 5-variant benchmark suite
 ├── data/
 │   └── caltech101_classification/ # Real test images (butterfly, dalmatian, dolphin)
 │       ├── butterfly/             # 91 images
@@ -587,7 +630,11 @@ VisualRWKV7_Pytorch/
 │   │   ├── gnn_tiny.yaml          # GNN ablation tiny config
 │   │   ├── gnn_small.yaml         # GNN ablation small config
 │   │   ├── gnn_medium.yaml        # GNN ablation medium config
-│   │   └── gnn_large.yaml         # GNN ablation large config
+│   │   ├── gnn_large.yaml         # GNN ablation large config
+│   │   ├── hybrid_tiny.yaml       # Hybrid RWKV+GNN tiny config
+│   │   ├── hybrid_small.yaml      # Hybrid RWKV+GNN small config
+│   │   ├── hybrid_medium.yaml     # Hybrid RWKV+GNN medium config
+│   │   └── hybrid_large.yaml      # Hybrid RWKV+GNN large config
 │   └── task/
 │       ├── humordb.yaml           # HumorDB training config
 │       └── ade20k.yaml            # ADE20K training config
@@ -804,7 +851,7 @@ Run the full test suite:
 uv run pytest -v
 ```
 
-**Expected output:** 132 tests pass.
+**Expected output:** 131 tests pass.
 
 ```text
 tests/test_models/test_model.py             ...................................................... (92 tests)
@@ -812,7 +859,7 @@ tests/test_data/test_colors.py             ......................... (25 tests)
 tests/test_data/test_transforms.py         .................... (20 tests)
 tests/test_data/test_diff_slic.py          .............. (14 tests)
 tests/test_regression.py         ....... (7 tests) + warnings
-============================= 132 passed in 12-13s =============================
+============================= 131 passed in 12-13s =============================
 ```
 
 Tests are structured to verify behavior through **public interfaces** only, internal module reshuffling won't break them. Key test categories:
