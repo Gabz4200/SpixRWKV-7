@@ -4,16 +4,32 @@ Provides PyTorch bindings to optimized C++ kernels:
 1. rwkv7_recurrent_scan — Accelerates the RWKV-7 delta-rule recurrence (O(S²) per step)
 2. diff_slic_update_clusters — Fused cluster update for differentiable SLIC
 3. diff_slic_assign_pixels — Fused pixel-to-superpixel assignment
-
-Both kernels have an AVX512-optimized path that is dispatched at runtime
-via cpuid checks. On CPUs without AVX512, a generic fallback is used.
 """
 
 from typing import Optional, Tuple
 
 import torch
 
-from . import _C  # type: ignore[attr-defined]  # fails fast if .so not built
+from . import _C  # type: ignore[attr-defined]  # loads TORCH_LIBRARY registrations
+
+# =====================================================================
+# FakeTensor kernels for torch.compile / torch.export support
+# =====================================================================
+
+@torch.library.register_fake("spixrwkv7::rwkv7_recurrent_scan")
+def _rwkv7_recurrent_scan_fake(state, r, v, w, a, kk, kt):
+    return torch.empty_like(r)
+
+@torch.library.register_fake("spixrwkv7::diff_slic_update_clusters")
+def _update_clusters_fake(elem_feats, clst_feats, stride_h, stride_w, radius, tau, normalize):
+    return torch.empty_like(clst_feats)
+
+@torch.library.register_fake("spixrwkv7::diff_slic_assign_pixels")
+def _assign_pixels_fake(elem_feats, clst_feats, stride_h, stride_w, radius, tau):
+    nn = 2 * radius + 1
+    B, C, H, W = elem_feats.shape
+    return torch.empty(B, nn * nn, H, W, device=elem_feats.device, dtype=elem_feats.dtype)
+
 
 # =====================================================================
 # RWKV-7 Recurrent Scan
@@ -37,8 +53,7 @@ def rwkv7_recurrent_scan(
       out[t]     = state[t+1] @ r
 
     The r_k bonus (r * kt * r_k * v) is NOT computed here; the caller
-    (OptimizedRecurrentScan) applies it after GroupNorm, matching the
-    original PyTorch semantics.
+    applies it after GroupNorm, matching the original PyTorch semantics.
 
     Args:
         state: (B, Hd, S, S) recurrent state
@@ -63,13 +78,11 @@ def rwkv7_recurrent_scan(
             v = v * m
         if r.is_cuda:
             if hasattr(_C, "recurrent_scan_cuda"):
-                # CUDA kernel: 7 args (state, r, v, w, a, kk, kt).
-                out = _C.recurrent_scan_cuda(state, r, v, w, a, kk, kt)
+                out = torch.ops.spixrwkv7.rwkv7_recurrent_scan(state, r, v, w, a, kk, kt)
             else:
                 return _rwkv7_scan_pytorch(state, r, v, w, a, kk, kt, mask)
         else:
-            # CPU kernel: k not read, r_k bonus computed post-kernel in Python.
-            out = _C.rwkv7_recurrent_scan(state, r, v, w, a, kk, kt)
+            out = torch.ops.spixrwkv7.rwkv7_recurrent_scan(state, r, v, w, a, kk, kt)
         if mask is not None:
             out = out * mask.unsqueeze(-1).unsqueeze(-1)
         return out
@@ -86,10 +99,7 @@ def _rwkv7_scan_pytorch(
     kt: torch.Tensor,
     mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Pure PyTorch fallback for RWKV-7 recurrent scan (for verification).
-
-    Does NOT compute the r_k bonus; that is added by the caller.
-    """
+    """Pure PyTorch fallback for RWKV-7 recurrent scan (for verification)."""
     _, N, _, _ = r.shape
     outputs = []
 
@@ -108,16 +118,12 @@ def _rwkv7_scan_pytorch(
             mask_t = 1.0
             w_eff = w_t
 
-        # Outer products (rank-1)
-        vk = v_t.unsqueeze(-1) @ kt_t.unsqueeze(-2)  # (B, Hd, S, S)
-        ab = (-kk_t).unsqueeze(-1) @ (kk_t * a_t).unsqueeze(-2)  # (B, Hd, S, S)
+        vk = v_t.unsqueeze(-1) @ kt_t.unsqueeze(-2)
+        ab = (-kk_t).unsqueeze(-1) @ (kk_t * a_t).unsqueeze(-2)
 
-        # State update
-        # w: (B,Hd,S) → (B,Hd,1,S) for column-wise decay
         state.copy_(state * w_eff.unsqueeze(-2)
                     + (state @ ab.float() + vk.float()) * mask_t)
 
-        # Output = state @ r
         out_t = (state @ r_t.unsqueeze(-1)).squeeze(-1)
         if mask is not None:
             out_t = out_t * mask[:, t, None, None]
@@ -139,41 +145,21 @@ def diff_slic_update_clusters(
     normalize: bool = True,
     use_cpp: bool = True,
 ) -> torch.Tensor:
-    """Fused cluster update for diffSLIC — C++ or PyTorch fallback.
-
-    For each cluster center, extracts a window of pixels,
-    computes similarity → softmax → weighted aggregation.
-
-    Args:
-        elem_feats: (B, C, H, W) padded image features
-        clst_feats: (B, C, h_s, w_s) cluster centers
-        stride: (stride_h, stride_w) pixel stride
-        radius: candidate search radius
-        tau: softmax temperature
-        normalize: L2-normalize features before comparison
-        use_cpp: use C++ kernel (default True)
-
-    Returns:
-        new_clst_feats: (B, C, h_s, w_s) updated cluster features
-    """
+    """Fused cluster update for diffSLIC — C++ or PyTorch fallback."""
     if use_cpp:
         stride_h, stride_w = stride
         if elem_feats.is_cuda:
             if hasattr(_C, "update_clusters_cuda"):
-                return _C.update_clusters_cuda(
-                    elem_feats, clst_feats,
-                    stride_h, stride_w,
-                    radius, tau, normalize,
+                return torch.ops.spixrwkv7.diff_slic_update_clusters(
+                    elem_feats, clst_feats, stride_h, stride_w, radius, tau, normalize,
                 )
             else:
                 return _update_clusters_pytorch(
                     elem_feats, clst_feats, stride, radius, tau, normalize,
                 )
         else:
-            return _C.diff_slic_update_clusters(
-                elem_feats, clst_feats,
-                stride_h, stride_w,
-                radius, tau, normalize,
+            return torch.ops.spixrwkv7.diff_slic_update_clusters(
+                elem_feats, clst_feats, stride_h, stride_w, radius, tau, normalize,
             )
     return _update_clusters_pytorch(
         elem_feats, clst_feats, stride, radius, tau, normalize,
@@ -206,37 +192,21 @@ def diff_slic_assign_pixels(
     tau: float = 0.01,
     use_cpp: bool = True,
 ) -> torch.Tensor:
-    """Fused pixel-to-superpixel assignment — C++ or PyTorch fallback.
-
-    Args:
-        elem_feats: (B, C, H, W) padded image features
-        clst_feats: (B, C, h_s, w_s) cluster centers
-        stride: (stride_h, stride_w)
-        radius: candidate search radius
-        tau: softmax temperature
-        use_cpp: use C++ kernel (default True)
-
-    Returns:
-        assignment: (B, (2*radius+1)^2, H, W) soft assignment
-    """
+    """Fused pixel-to-superpixel assignment — C++ or PyTorch fallback."""
     if use_cpp:
         stride_h, stride_w = stride
         if elem_feats.is_cuda:
             if hasattr(_C, "assign_pixels_cuda"):
-                return _C.assign_pixels_cuda(
-                    elem_feats, clst_feats,
-                    stride_h, stride_w,
-                    radius, tau,
+                return torch.ops.spixrwkv7.diff_slic_assign_pixels(
+                    elem_feats, clst_feats, stride_h, stride_w, radius, tau,
                 )
             else:
                 return _assign_pixels_pytorch(
                     elem_feats, clst_feats, stride, radius, tau,
                 )
         else:
-            return _C.diff_slic_assign_pixels(
-                elem_feats, clst_feats,
-                stride_h, stride_w,
-                radius, tau,
+            return torch.ops.spixrwkv7.diff_slic_assign_pixels(
+                elem_feats, clst_feats, stride_h, stride_w, radius, tau,
             )
     return _assign_pixels_pytorch(
         elem_feats, clst_feats, stride, radius, tau,
@@ -258,31 +228,5 @@ def _assign_pixels_pytorch(
     return assignments
 
 
-# =====================================================================
-# GGML CPU path (optional — requires building spixrwkv7/kernels/cpp/ggml_bridge)
-# =====================================================================
-# GGML provides quantized (INT4/INT8) and AVX2-optimized FP32 SGEMM.
-# On CPUs without AVX512, GGML's SGEMM outperforms the generic C path
-# for large S×S matrix multiplications (S = HEAD_SIZE = 64).
-#
-# Integration steps (not yet implemented):
-#   1. Build ggml as a CMake subproject in spixrwkv7/kernels/cpp/ggml/
-#   2. Add ggml_mul_mat wrapper in torch_binding.cpp
-#   3. Expose via _C.ggml_rwkv7_recurrent_scan(state, A, vk)
-#   4. Toggle: rwkv7_recurrent_scan(..., use_ggml=True)
-#
-# Detection stub (import side-effect: checks for ggml symbol):
-
-def _check_ggml_available() -> bool:
-    """Return True if the GGML-accelerated scan is available.
-
-    Currently always returns False — GGML bridge not yet compiled.
-    To enable: build spixrwkv7/kernels/cpp with -DWITH_GGML=ON.
-    """
-    return hasattr(_C, "ggml_rwkv7_recurrent_scan")
-
-
-HAS_GGML: bool = _check_ggml_available()
+HAS_GGML: bool = False
 _HAS_CPP_KERNEL: bool = True
-
-

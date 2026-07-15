@@ -1,102 +1,115 @@
-// SpixRWKV-7: PyTorch bindings for CPU (and optionally CUDA) kernels.
-#include <torch/extension.h>
-#include <string>
+// SpixRWKV-7: PyTorch custom op registration via TORCH_LIBRARY.
+#include <torch/library.h>
+#include <Python.h>
+#include "rwkv7_kernel.hpp"
+#include "diff_slic_kernel.hpp"
 
-// Forward declarations from RWKV-7 kernel
-namespace spixrwkv7 {
-namespace kernel {
+extern "C" {
+PyObject* PyInit__C(void) {
+    static struct PyModuleDef module_def = {
+        PyModuleDef_HEAD_INIT,
+        "_C",
+        NULL,
+        -1,
+        NULL,
+    };
+    return PyModule_Create(&module_def);
+}
+}
 
-torch::Tensor rwkv7_recurrent_scan(
+TORCH_LIBRARY(spixrwkv7, m) {
+    m.def("rwkv7_recurrent_scan(Tensor state, Tensor r, Tensor v, Tensor w, Tensor a, Tensor kk, Tensor kt) -> Tensor");
+    m.def("diff_slic_update_clusters(Tensor elem_feats, Tensor clst_feats, int stride_h, int stride_w, int radius, float tau, bool normalize) -> Tensor");
+    m.def("diff_slic_assign_pixels(Tensor elem_feats, Tensor clst_feats, int stride_h, int stride_w, int radius, float tau) -> Tensor");
+}
+
+namespace {
+
+torch::Tensor rwkv7_recurrent_scan_wrapper(
     const torch::Tensor& state,
     const torch::Tensor& r,
     const torch::Tensor& v,
     const torch::Tensor& w,
     const torch::Tensor& a,
     const torch::Tensor& kk,
-    const torch::Tensor& kt);
+    const torch::Tensor& kt) {
+    return spixrwkv7::kernel::rwkv7_recurrent_scan(state, r, v, w, a, kk, kt);
+}
 
-torch::Tensor diff_slic_update_clusters(
+torch::Tensor diff_slic_update_clusters_wrapper(
     const torch::Tensor& elem_feats,
     const torch::Tensor& clst_feats,
-    int stride_h, int stride_w,
-    int radius, float tau,
-    bool normalize);
+    int64_t stride_h, int64_t stride_w,
+    int64_t radius, double tau,
+    bool normalize) {
+    return spixrwkv7::kernel::diff_slic_update_clusters(
+        elem_feats, clst_feats,
+        static_cast<int>(stride_h), static_cast<int>(stride_w),
+        static_cast<int>(radius), static_cast<float>(tau), normalize);
+}
 
-torch::Tensor diff_slic_assign_pixels(
+torch::Tensor diff_slic_assign_pixels_wrapper(
     const torch::Tensor& elem_feats,
     const torch::Tensor& clst_feats,
-    int stride_h, int stride_w,
-    int radius, float tau);
+    int64_t stride_h, int64_t stride_w,
+    int64_t radius, double tau) {
+    return spixrwkv7::kernel::diff_slic_assign_pixels(
+        elem_feats, clst_feats,
+        static_cast<int>(stride_h), static_cast<int>(stride_w),
+        static_cast<int>(radius), static_cast<float>(tau));
+}
+
+} // anonymous namespace
+
+TORCH_LIBRARY_IMPL(spixrwkv7, CPU, m) {
+    m.impl("rwkv7_recurrent_scan", &rwkv7_recurrent_scan_wrapper);
+    m.impl("diff_slic_update_clusters", &diff_slic_update_clusters_wrapper);
+    m.impl("diff_slic_assign_pixels", &diff_slic_assign_pixels_wrapper);
+}
 
 #ifdef WT_CUDA
-torch::Tensor recurrent_scan_cuda(
+
+namespace {
+
+torch::Tensor recurrent_scan_cuda_wrapper(
     torch::Tensor& state,
     const torch::Tensor& r,
     const torch::Tensor& v,
     const torch::Tensor& w,
     const torch::Tensor& a,
     const torch::Tensor& kk,
-    const torch::Tensor& kt);
-
-torch::Tensor update_clusters_cuda(
-    const torch::Tensor& elem_feats,
-    const torch::Tensor& clst_feats,
-    int stride_h, int stride_w,
-    int radius, float tau, bool normalize);
-
-torch::Tensor assign_pixels_cuda(
-    const torch::Tensor& elem_feats,
-    const torch::Tensor& clst_feats,
-    int stride_h, int stride_w,
-    int radius, float tau);
-#endif
-} // namespace kernel
-} // namespace spixrwkv7
-
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    // ---- RWKV-7 recurrent scan (CPU) ----
-    // Note: k (raw key) and r_k (bonus key) are NOT passed. k is pre-processed
-    // into kt by the Python caller; the r_k bonus is added post-GroupNorm.
-    m.def("rwkv7_recurrent_scan", &spixrwkv7::kernel::rwkv7_recurrent_scan,
-          "RWKV-7 recurrent scan (CPU, AVX2-accelerated when available)",
-          py::arg("state"), py::arg("r"),
-          py::arg("v"), py::arg("w"), py::arg("a"),
-          py::arg("kk"), py::arg("kt"));
-
-    // ---- diffSLIC cluster ops ----
-    m.def("diff_slic_update_clusters", &spixrwkv7::kernel::diff_slic_update_clusters,
-          "diffSLIC cluster update (fused CPU kernel)",
-          py::arg("elem_feats"), py::arg("clst_feats"),
-          py::arg("stride_h"), py::arg("stride_w"),
-          py::arg("radius"), py::arg("tau"),
-          py::arg("normalize") = true);
-
-    m.def("diff_slic_assign_pixels", &spixrwkv7::kernel::diff_slic_assign_pixels,
-          "diffSLIC pixel-to-superpixel assignment (CPU kernel)",
-          py::arg("elem_feats"), py::arg("clst_feats"),
-          py::arg("stride_h"), py::arg("stride_w"),
-          py::arg("radius"), py::arg("tau"));
-
-#ifdef WT_CUDA
-    // ---- RWKV-7 recurrent scan (CUDA) ----
-    m.def("recurrent_scan_cuda", &spixrwkv7::kernel::recurrent_scan_cuda,
-          "RWKV-7 recurrent scan (CUDA optimised)",
-          py::arg("state"), py::arg("r"),
-          py::arg("v"), py::arg("w"), py::arg("a"),
-          py::arg("kk"), py::arg("kt"));
-
-    // ---- diffSLIC CUDA ops ----
-    m.def("update_clusters_cuda", &spixrwkv7::kernel::update_clusters_cuda,
-          "diffSLIC cluster update (CUDA kernel)",
-          py::arg("elem_feats"), py::arg("clst_feats"),
-          py::arg("stride_h"), py::arg("stride_w"),
-          py::arg("radius"), py::arg("tau"),
-          py::arg("normalize") = true);
-
-    m.def("assign_pixels_cuda", &spixrwkv7::kernel::assign_pixels_cuda,
-          "diffSLIC pixel-to-superpixel assignment (CUDA kernel)",
-          py::arg("elem_feats"), py::arg("clst_feats"),
-          py::arg("stride_h"), py::arg("stride_w"),
-          py::arg("radius"), py::arg("tau"));
-#endif
+    const torch::Tensor& kt) {
+    return spixrwkv7::kernel::recurrent_scan_cuda(state, r, v, w, a, kk, kt);
 }
+
+torch::Tensor update_clusters_cuda_wrapper(
+    const torch::Tensor& elem_feats,
+    const torch::Tensor& clst_feats,
+    int64_t stride_h, int64_t stride_w,
+    int64_t radius, double tau,
+    bool normalize) {
+    return spixrwkv7::kernel::update_clusters_cuda(
+        elem_feats, clst_feats,
+        static_cast<int>(stride_h), static_cast<int>(stride_w),
+        static_cast<int>(radius), static_cast<float>(tau), normalize);
+}
+
+torch::Tensor assign_pixels_cuda_wrapper(
+    const torch::Tensor& elem_feats,
+    const torch::Tensor& clst_feats,
+    int64_t stride_h, int64_t stride_w,
+    int64_t radius, double tau) {
+    return spixrwkv7::kernel::assign_pixels_cuda(
+        elem_feats, clst_feats,
+        static_cast<int>(stride_h), static_cast<int>(stride_w),
+        static_cast<int>(radius), static_cast<float>(tau));
+}
+
+} // anonymous namespace
+
+TORCH_LIBRARY_IMPL(spixrwkv7, CUDA, m) {
+    m.impl("rwkv7_recurrent_scan", &recurrent_scan_cuda_wrapper);
+    m.impl("diff_slic_update_clusters", &update_clusters_cuda_wrapper);
+    m.impl("diff_slic_assign_pixels", &assign_pixels_cuda_wrapper);
+}
+#endif

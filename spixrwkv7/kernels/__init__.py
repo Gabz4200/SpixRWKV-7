@@ -3,8 +3,6 @@
 Provides accelerated C++ implementations of:
 - RWKV-7 recurrent scan (delta-rule state update + output)
 - diffSLIC cluster update and pixel-to-superpixel assignment
-
-All kernels support runtime CPU dispatch: AVX512 (when available) → generic.
 """
 
 from spixrwkv7.kernels.optimized_block import OptimizedVision_RWKV7_Block, ParallelRecurrentScan
@@ -20,7 +18,6 @@ from spixrwkv7.kernels.rwkv7_kernel import (
     rwkv7_recurrent_scan,
 )
 
-# Kernel is always available (module fails at import if _C.so not built)
 HAS_CPP_KERNEL: bool = True
 
 __all__ = [

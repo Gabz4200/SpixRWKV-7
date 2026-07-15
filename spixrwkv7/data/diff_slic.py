@@ -273,18 +273,10 @@ class DiffSLIC(nn.Module):
         """Return True if the C++ backend is loaded and active."""
         if not self.use_cpp:
             return False
-        try:
-            from spixrwkv7.kernels.rwkv7_kernel import _C
-            return hasattr(_C, "diff_slic_update_clusters") and hasattr(_C, "diff_slic_assign_pixels")
-        except (ImportError, AttributeError):
-            global _cpp_fallback_warned
-            if not _cpp_fallback_warned:
-                _cpp_fallback_warned = True
-                print(
-                    "WARNING: C++ diff_slic kernel unavailable; "
-                    "falling back to the PyTorch implementation."
-                )
-            return False
+        import torch
+        _ = torch.ops.spixrwkv7.diff_slic_update_clusters
+        _ = torch.ops.spixrwkv7.diff_slic_assign_pixels
+        return True
     def forward(
         self, x: torch.Tensor, clst_feats: Optional[torch.Tensor] = None, n_spixels: Optional[int] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
