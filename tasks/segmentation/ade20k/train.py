@@ -230,6 +230,7 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--checkpoint-dir", type=str, default=str(_CHECKPOINT_DIR))
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--device", choices=["cpu", "cuda", "auto"], default="auto")
 
     args = parser.parse_args()
 
@@ -239,12 +240,12 @@ def main() -> None:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    print("[CPU Tuning] For faster training, try:")
-    print("  export OMP_NUM_THREADS=$(nproc)")
-    print("  export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libtcmalloc.so:$LD_PRELOAD")
-    print()
-
     device = torch.device("cpu")
+    if args.device == "cuda" or (args.device == "auto" and torch.cuda.is_available()):
+        device = torch.device("cuda")
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(args.seed)
+    print()
 
     cfg = load_model_config(args.model_type, args.scale)
     if args.embed_dims is not None:
@@ -312,13 +313,14 @@ def main() -> None:
         shuffle_buffer=0, class_map=class_map,
     )
 
+    pin = device.type == "cuda"
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size, num_workers=args.num_workers,
-        pin_memory=False,
+        pin_memory=pin, drop_last=pin,
     )
     val_loader = DataLoader(
         val_ds, batch_size=args.batch_size, num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=pin,
     )
 
     train_len = args.max_train_samples if args.max_train_samples is not None else len(train_ds)
@@ -332,6 +334,16 @@ def main() -> None:
 
     # --- Model ---
     model = ADE20KSegModel(cfg, NUM_CLASSES, model_type=args.model_type).to(device)
+
+    # Multi-GPU
+    if device.type == "cuda" and torch.cuda.device_count() > 1:
+        print(f"  Using {torch.cuda.device_count()} GPUs via DataParallel")
+        model = nn.DataParallel(model)
+
+    # Mixed precision
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+
     total_params = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     head_params = sum(p.numel() for p in model.seg_head.parameters())
@@ -383,18 +395,21 @@ def main() -> None:
             inputs, targets = inputs.to(device), targets.to(device)
 
             optimizer.zero_grad(set_to_none=True)
-            logits = model(inputs)
-            loss = criterion(logits, targets)
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                logits = model(inputs)
+                loss = criterion(logits, targets)
 
             if torch.isnan(loss).item():
                 print(f"  E{epoch:02d} B{n_batches+1:04d} loss=NaN -- skip batch")
                 continue
 
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             grad_norm = compute_grad_norm(model)
             if args.grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             scheduler.step()
 
             epoch_loss += loss.item()
@@ -422,8 +437,9 @@ def main() -> None:
         with torch.no_grad():
             for inputs, targets in val_loader:
                 inputs, targets = inputs.to(device), targets.to(device)
-                logits = model(inputs)
-                vloss = criterion(logits, targets)
+                with torch.amp.autocast("cuda", enabled=use_amp):
+                    logits = model(inputs)
+                    vloss = criterion(logits, targets)
                 if torch.isnan(vloss).item():
                     continue
                 val_loss += vloss.item()

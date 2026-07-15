@@ -141,6 +141,7 @@ def make_loader(
     cache_dir: str,
     shuffle: bool,
     num_workers: int,
+    device: torch.device = torch.device("cpu"),
     rebuild_cache: bool = False,
 ):
     """Build a DataLoader for a HumorDB split with on-disk caching."""
@@ -152,7 +153,7 @@ def make_loader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=(device.type == "cuda"),
         drop_last=False,
     )
 
@@ -341,6 +342,10 @@ def main() -> None:
         "--max-val-samples", type=int, default=None,
         help="Max validation samples to use (default: use all)"
     )
+    parser.add_argument(
+        "--device", choices=["cpu", "cuda", "auto"], default="auto",
+        help="Device: cpu, cuda, or auto (default: auto)"
+    )
     args = parser.parse_args()
 
     if args.max_train_samples is not None:
@@ -353,7 +358,13 @@ def main() -> None:
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     device = torch.device("cpu")
+    if args.device == "cuda" or (args.device == "auto" and torch.cuda.is_available()):
+        device = torch.device("cuda")
     torch.manual_seed(args.seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(args.seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
     np.random.seed(args.seed)
     random.seed(args.seed)
 
@@ -395,12 +406,24 @@ def main() -> None:
 
     model = HumorRegressor(backbone, embed_dims=cfg["embed_dims"]).to(device)
 
+    # Multi-GPU
+    if device.type == "cuda" and torch.cuda.device_count() > 1:
+        print(f"  Using {torch.cuda.device_count()} GPUs via DataParallel")
+        model = nn.DataParallel(model)
+
+    # Mixed precision
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+
     total_params = sum(p.numel() for p in model.parameters())
     train_params = sum(
         p.numel() for p in model.parameters() if p.requires_grad
     )
 
-    print("  Device          CPU")
+    print(f"  Device          {device}")
+    if device.type == "cuda":
+        print(f"  GPU             {torch.cuda.get_device_name(0)}")
+        print(f"  GPUs available  {torch.cuda.device_count()}")
     print(f"  Image height      {args.img_size}")
     print(f"  Embed dims      {args.embed_dims}")
     print(f"  Heads           {args.num_heads}")
@@ -438,12 +461,12 @@ def main() -> None:
     cache_dir = str(ckpt_dir)
     train_loader = make_loader(
         "train", args.img_size, args.batch_size, cache_dir,
-        shuffle=True, num_workers=args.num_workers,
+        shuffle=True, num_workers=args.num_workers, device=device,
         rebuild_cache=args.rebuild_cache,
     )
     val_loader = make_loader(
         "validation", args.img_size, args.batch_size, cache_dir,
-        shuffle=False, num_workers=args.num_workers,
+        shuffle=False, num_workers=args.num_workers, device=device,
         rebuild_cache=args.rebuild_cache,
     )
 
@@ -469,18 +492,21 @@ def main() -> None:
             targets = targets.to(device)  # (B,)
 
             optimizer.zero_grad(set_to_none=True)
-            preds = model(images)  # (B,)
 
-            loss = F.mse_loss(preds, targets)
-            if args.model_type == "vq":
-                q_loss = getattr(model.backbone, "_last_q_loss", None)
-                if q_loss is not None:
-                    loss = loss + q_loss
-            loss.backward()
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                preds = model(images)  # (B,)
+                loss = F.mse_loss(preds, targets)
+                if args.model_type == "vq":
+                    q_loss = getattr(model.backbone, "_last_q_loss", None)
+                    if q_loss is not None:
+                        loss = loss + q_loss
 
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             gn = compute_grad_norm(model)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             train_losses.append(loss.item())
             train_preds.append(preds.detach().cpu())
@@ -523,9 +549,9 @@ def main() -> None:
             for images, targets in val_loader:
                 images = images.to(device)
                 targets = targets.to(device)
-                preds = model(images)
-
-                loss = F.mse_loss(preds, targets)
+                with torch.amp.autocast("cuda", enabled=use_amp):
+                    preds = model(images)
+                    loss = F.mse_loss(preds, targets)
                 val_losses.append(loss.item())
                 val_preds.append(preds.cpu())
                 val_targets.append(targets.cpu())
@@ -617,7 +643,7 @@ def main() -> None:
 
     test_loader = make_loader(
         "test", args.img_size, args.batch_size, cache_dir,
-        shuffle=False, num_workers=args.num_workers,
+        shuffle=False, num_workers=args.num_workers, device=device,
     )
 
     model.eval()
@@ -628,7 +654,8 @@ def main() -> None:
         for images, targets in test_loader:
             images = images.to(device)
             targets = targets.to(device)
-            preds = model(images)
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                preds = model(images)
             test_preds.append(preds.cpu())
             test_targets.append(targets.cpu())
 

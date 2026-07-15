@@ -156,6 +156,8 @@ def main() -> None:
         sys.exit(1)
 
     device = torch.device("cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
