@@ -133,7 +133,7 @@ class UnidirectionalSpatialMixer(nn.Module):
         self.n_layer = n_layer
 
         self.dynamic_offset = DynamicOffset(n_embd)
-        self.scan = RecurrentScan(n_embd, n_head, layer_id, n_layer, use_cpp=use_cpp)
+        self.scan = RecurrentScan(n_embd, n_head, layer_id, n_layer, use_cpp=use_cpp, drop_prob=drop_prob)
         self.att_ln = get_norm_layer(norm_layer)(n_embd)
         self.drop_path = DropPath(drop_prob) if drop_prob > 0.0 else nn.Identity()
 
@@ -184,6 +184,10 @@ class UnidirectionalRWKV7Block(nn.Module):
     Architecture (same as Vision_RWKV7_Block but unidirectional):
       LN0 (layer 0 only) → LN1 → UnidirectionalSpatialMixer → residual
       → LN2 → ChannelMix → residual
+
+    Supports optional attention residuals (block-level cross-attention
+    over previous block representations) for parity with the base
+    Vision_RWKV7_Block.
     """
 
     def __init__(
@@ -199,6 +203,9 @@ class UnidirectionalRWKV7Block(nn.Module):
         act_layer: str = "relu2",
         num_prepend_tokens: int = 0,
         use_cpp: bool = False,
+        use_attnres: bool = False,
+        attnres_gate_type: str = "bias",
+        attnres_recency_bias_init: float = 10.0,
     ):
         super().__init__()
         self.layer_id = layer_id
@@ -227,6 +234,24 @@ class UnidirectionalRWKV7Block(nn.Module):
             norm_layer=norm_layer, act_layer=act_layer,
             num_prepend_tokens=num_prepend_tokens,
         )
+
+        # Attention residuals
+        self.use_attnres = use_attnres
+        self.attnres_gate_type = attnres_gate_type
+        if use_attnres:
+            self.attn_res_proj = nn.Linear(n_embd, 1, bias=False)
+            self.attn_res_norm = get_norm_layer(norm_layer)(n_embd)
+            self.attn_res_bias = nn.Parameter(torch.tensor(attnres_recency_bias_init))
+            nn.init.zeros_(self.attn_res_proj.weight)
+            if attnres_gate_type == "sigmoid_scalar":
+                self.attn_res_gate_logit = nn.Parameter(torch.tensor(-2.0))
+            elif attnres_gate_type == "sigmoid_vector":
+                self.attn_res_gate_proj = nn.Linear(n_embd, n_embd, bias=True)
+                nn.init.zeros_(self.attn_res_gate_proj.weight)
+                nn.init.constant_(self.attn_res_gate_proj.bias, -2.0)
+            elif attnres_gate_type == "learnable_alpha":
+                self.attn_res_alpha = nn.Parameter(torch.tensor(0.0))
+
         self._init_weights()
 
     def _init_weights(self):
@@ -250,9 +275,25 @@ class UnidirectionalRWKV7Block(nn.Module):
         dists: Optional[torch.Tensor] = None,
         v_first: Optional[torch.Tensor] = None,
         mask: Optional[torch.Tensor] = None,
+        attnres_history: Optional[list] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         if self.layer_id == 0:
             x = self.ln0(x)
+
+        # Attention residuals: attend over previous block representations
+        if self.use_attnres and attnres_history is not None and len(attnres_history) > 0:
+            from spixrwkv7.models.spixrwkv7 import block_attn_res
+            h_attn = block_attn_res(
+                attnres_history, x,
+                self.attn_res_proj, self.attn_res_norm, self.attn_res_bias,
+            )
+            from spixrwkv7.models.common import apply_attnres_gate
+            x = apply_attnres_gate(
+                x, h_attn, self.attnres_gate_type,
+                gate_logit=getattr(self, "attn_res_gate_logit", None),
+                gate_proj=getattr(self, "attn_res_gate_proj", None),
+                alpha=getattr(self, "attn_res_alpha", None),
+            )
 
         xn = self.ln1(x)
         x, v_first = self.spatial_mixer(
@@ -508,6 +549,7 @@ class HybridVision(nn.Module):
         gnn_heads: int = 4,
         gnn_aggr: str = "mean",
         jk: str = "none",
+        register_edge_weight_scale: float = 1.0,
         # Attention residual configuration
         use_attnres: bool = False,
         attnres_gate_type: str = "bias",
@@ -536,6 +578,7 @@ class HybridVision(nn.Module):
         self.gnn_heads = gnn_heads
         self.gnn_aggr = gnn_aggr
         self.jk = jk
+        self.register_edge_weight_scale = register_edge_weight_scale
 
         # Attention residual configuration (for RWKV-7 blocks)
         self.use_attnres = use_attnres
@@ -653,6 +696,9 @@ class HybridVision(nn.Module):
                         act_layer=act_layer,
                         num_prepend_tokens=self.register_tokens,
                         use_cpp=use_cpp,
+                        use_attnres=self.use_attnres,
+                        attnres_gate_type=self.attnres_gate_type,
+                        attnres_recency_bias_init=self.attnres_recency_bias_init,
                     ))
                 else:
                     blocks.append(GNNBlock(
@@ -664,6 +710,9 @@ class HybridVision(nn.Module):
                         init_values=init_values,
                         norm_layer=norm_layer,
                         act_layer=act_layer,
+                        use_attnres=self.use_attnres,
+                        attnres_gate_type=self.attnres_gate_type,
+                        attnres_recency_bias_init=self.attnres_recency_bias_init,
                     ))
                 global_idx += 1
 
@@ -687,6 +736,7 @@ class HybridVision(nn.Module):
         neighbors: Tensor,
         neighbor_dists: Tensor,
         num_register: int = 0,
+        register_edge_weight_scale: float = 1.0,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """Convert (B, N, k) KNN neighbours into a batched PyG edge set.
 
@@ -696,6 +746,7 @@ class HybridVision(nn.Module):
         highway that compensates for unidirectional scan.  Register→superpixel
         edges let GNN layers aggregate spatial context into registers, and
         the reverse edges let superpixel nodes receive that global context.
+        Scale factor prevents register hub domination in deep GNN stacks.
         """
         B, N, k = neighbors.shape
         device = neighbors.device
@@ -729,10 +780,14 @@ class HybridVision(nn.Module):
                 sp_idx = torch.arange(N, device=device).view(1, N)
                 reg_src = (base + reg_idx).expand(R, N).reshape(-1)
                 reg_tgt = (sp_offset + sp_idx).expand(R, N).reshape(-1)
-                all_src.append(reg_src)
-                all_tgt.append(reg_tgt)
                 reg_dists = neighbor_dists[b].mean(dim=-1)
                 reg_w = (1.0 / (reg_dists + 1e-6)).unsqueeze(0).expand(R, -1).reshape(-1)
+                reg_w = reg_w * register_edge_weight_scale
+                # Forward: register → superpixel
+                all_src.append(reg_src)
+                all_tgt.append(reg_tgt)
+                all_w.append(reg_w)
+                # Backward: superpixel → register
                 all_src.append(reg_tgt)
                 all_tgt.append(reg_src)
                 all_w.append(reg_w)
@@ -841,7 +896,8 @@ class HybridVision(nn.Module):
 
         # Build edges with register-to-all connectivity.
         edge_index, edge_weight, edge_attr = self._build_edges(
-            neighbors, neighbor_dists, num_register=self.register_tokens
+            neighbors, neighbor_dists, num_register=self.register_tokens,
+            register_edge_weight_scale=self.register_edge_weight_scale,
         )
 
         # Flatten to global node tensor for PyG message passing.
@@ -850,6 +906,11 @@ class HybridVision(nn.Module):
         # Collect per-layer features for Jumping Knowledge if enabled.
         need_jk = self.jk == "lstm" and self.jk_lstm is not None
         jk_layers: List[Tensor] = []
+        # Attention residual history uses 3D (B, R+N, D) format consistently.
+        # The initial entry is the input tokens before any blocks.
+        attnres_history: Optional[list] = (
+            [tokens] if self.use_attnres else None
+        )
         outs: List[Tensor] = []
 
         vf_first: Optional[Tensor] = None
@@ -862,10 +923,17 @@ class HybridVision(nn.Module):
                 # they are processed first, so their recurrent state broadcasts
                 # globally-aggregated context to all subsequent superpixel tokens.
                 block_tokens = x_nodes.view(B, -1, self.embed_dims)
-                block_tokens, vff = block(
-                    block_tokens, neighbors, neighbor_dists,
-                    v_first=vf_first, mask=sorted_mask,
-                )
+                if self.use_attnres and attnres_history is not None:
+                    block_tokens, vff = block(
+                        block_tokens, neighbors, neighbor_dists,
+                        v_first=vf_first, mask=sorted_mask,
+                        attnres_history=attnres_history,
+                    )
+                else:
+                    block_tokens, vff = block(
+                        block_tokens, neighbors, neighbor_dists,
+                        v_first=vf_first, mask=sorted_mask,
+                    )
                 if not vf_first_set:
                     vf_first = vff
                     vf_first_set = True
@@ -875,7 +943,16 @@ class HybridVision(nn.Module):
                 # Register nodes participate in message passing via the
                 # bipartite edges (register ↔ all superpixels), aggregating
                 # spatial context that the unidirectional scan cannot capture.
-                x_nodes = block(x_nodes, edge_index, edge_weight, edge_attr)
+                if self.use_attnres and attnres_history is not None:
+                    x_nodes = block(x_nodes, edge_index, edge_weight, edge_attr,
+                                    attnres_history=attnres_history)
+                else:
+                    x_nodes = block(x_nodes, edge_index, edge_weight, edge_attr)
+
+            if self.use_attnres and attnres_history is not None:
+                if i < len(self.blocks) - 1:
+                    # Store as 3D (B, R+N, D) for consistent block_attn_res usage.
+                    attnres_history.append(x_nodes.view(B, -1, self.embed_dims))
 
             if need_jk:
                 jk_layers.append(x_nodes)
@@ -902,6 +979,9 @@ class HybridVision(nn.Module):
                     H, W, h_s, w_s,
                 )
                 outs.append(feat)
+
+        if self.use_attnres and attnres_history is not None:
+            self.last_attnres_history = [t.detach() for t in attnres_history]
 
         return tuple(outs)
 
@@ -942,6 +1022,7 @@ def create_hybrid_vision(
     gnn_heads: int = 4,
     gnn_aggr: str = "mean",
     jk: str = "none",
+    register_edge_weight_scale: float = 1.0,
     use_attnres: bool = False,
     attnres_gate_type: str = "bias",
     attnres_recency_bias_init: float = 10.0,
@@ -986,6 +1067,7 @@ def create_hybrid_vision(
         gnn_heads=gnn_heads,
         gnn_aggr=gnn_aggr,
         jk=jk,
+        register_edge_weight_scale=register_edge_weight_scale,
         use_attnres=use_attnres,
         attnres_gate_type=attnres_gate_type,
         attnres_recency_bias_init=attnres_recency_bias_init,

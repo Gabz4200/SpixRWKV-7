@@ -33,6 +33,10 @@ from spixrwkv7.models.vq_rwkv7 import (
     VQ_RWKV7,
     create_vq_rwkv7,
 )
+from spixrwkv7.models.hybrid_spixrwkv7 import (
+    HybridVision,
+    create_hybrid_vision,
+)
 
 __all__ = [
     "ChannelMix",
@@ -54,7 +58,9 @@ __all__ = [
     "ConvolutionalVision_RWKV7",
     "create_conv_vision_rwkv7",
     "GNNVision",
+    "HybridVision",
     "create_gnn_vision",
+    "create_hybrid_vision",
     "create_vq_rwkv7",
     "create_vision_rwkv7",
     "drop_path",
