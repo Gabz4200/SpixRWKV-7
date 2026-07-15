@@ -1,7 +1,159 @@
+[EXPERIMENT] === SWEEP RUN: downsample_factor = 1.0 ===
+[EXPERIMENT] === LR SWEEP ===
+[EXPERIMENT] START label=lr=0.001 seed=42 depth=2 embed_dims=128 lr=0.001
+[EXPERIMENT] PARAMS backbone=772113 head=1931
+[EXPERIMENT] RESULT label=lr=0.001 steps=2 final_loss=2.078198 final_acc=25.0 best_acc=25.0 mean_step_time=1029.6ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.5420
+[EXPERIMENT] GRAD_BLOCK_1 avg_last_steps=0.4199
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=0.1260 std=0.5947 max=1.2558 min=-0.7807
+[EXPERIMENT] PROBS max=0.2600 mean_conf=0.2573
+[EXPERIMENT] FEAT mean=0.1500 std=0.9889 range=[-2.7148, 3.2574]
+[EXPERIMENT] END label=lr=0.001
+
+[EXPERIMENT] START label=lr=0.0005 seed=42 depth=2 embed_dims=128 lr=0.0005
+[EXPERIMENT] PARAMS backbone=772113 head=1931
+[EXPERIMENT] RESULT label=lr=0.0005 steps=2 final_loss=2.278446 final_acc=25.0 best_acc=25.0 mean_step_time=1370.2ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.5751
+[EXPERIMENT] GRAD_BLOCK_1 avg_last_steps=0.4383
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=0.1753 std=0.4591 max=1.0274 min=-0.6788
+[EXPERIMENT] PROBS max=0.2129 mean_conf=0.2115
+[EXPERIMENT] FEAT mean=0.1501 std=0.9887 range=[-2.7125, 3.2653]
+[EXPERIMENT] END label=lr=0.0005
+
+[EXPERIMENT] START label=lr=0.0001 seed=42 depth=2 embed_dims=128 lr=0.0001
+[EXPERIMENT] PARAMS backbone=772113 head=1931
+[EXPERIMENT] RESULT label=lr=0.0001 steps=2 final_loss=2.454770 final_acc=0.0 best_acc=0.0 mean_step_time=741.2ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.5604
+[EXPERIMENT] GRAD_BLOCK_1 avg_last_steps=0.4336
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=0.2151 std=0.4430 max=0.8167 min=-0.5844
+[EXPERIMENT] PROBS max=0.1668 mean_conf=0.1661
+[EXPERIMENT] FEAT mean=0.1492 std=0.9888 range=[-2.6218, 3.2242]
+[EXPERIMENT] END label=lr=0.0001
+
+[EXPERIMENT] START label=lr=5e-05 seed=42 depth=2 embed_dims=128 lr=5e-05
+[EXPERIMENT] PARAMS backbone=772113 head=1931
+[EXPERIMENT] RESULT label=lr=5e-05 steps=2 final_loss=2.477722 final_acc=0.0 best_acc=0.0 mean_step_time=569.5ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.5340
+[EXPERIMENT] GRAD_BLOCK_1 avg_last_steps=0.4068
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=0.2201 std=0.4485 max=0.7990 min=-0.5719
+[EXPERIMENT] PROBS max=0.1623 mean_conf=0.1619
+[EXPERIMENT] FEAT mean=0.1490 std=0.9888 range=[-2.6046, 3.2157]
+[EXPERIMENT] END label=lr=5e-05
+
+[EXPERIMENT] === DEPTH SCALING ===
+[EXPERIMENT] START label=depth=1 seed=42 depth=1 embed_dims=128 lr=0.0005
+[EXPERIMENT] PARAMS backbone=408081 head=1931
+[EXPERIMENT] RESULT label=depth=1 steps=2 final_loss=2.300152 final_acc=0.0 best_acc=0.0 mean_step_time=389.9ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.5756
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=-0.0479 std=0.6155 max=0.9066 min=-1.3009
+[EXPERIMENT] PROBS max=0.2188 mean_conf=0.2185
+[EXPERIMENT] FEAT mean=0.1513 std=0.9887 range=[-2.7049, 3.2959]
+[EXPERIMENT] END label=depth=1
+
+[EXPERIMENT] START label=depth=2 seed=42 depth=2 embed_dims=128 lr=0.0005
+[EXPERIMENT] PARAMS backbone=772113 head=1931
+[EXPERIMENT] RESULT label=depth=2 steps=2 final_loss=2.278446 final_acc=25.0 best_acc=25.0 mean_step_time=626.4ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.5751
+[EXPERIMENT] GRAD_BLOCK_1 avg_last_steps=0.4383
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=0.1753 std=0.4591 max=1.0274 min=-0.6788
+[EXPERIMENT] PROBS max=0.2129 mean_conf=0.2115
+[EXPERIMENT] FEAT mean=0.1501 std=0.9887 range=[-2.7125, 3.2653]
+[EXPERIMENT] END label=depth=2
+
+[EXPERIMENT] START label=depth=4 seed=42 depth=4 embed_dims=128 lr=0.0005
+[EXPERIMENT] PARAMS backbone=1500177 head=1931
+[EXPERIMENT] RESULT label=depth=4 steps=2 final_loss=2.299818 final_acc=25.0 best_acc=25.0 mean_step_time=997.0ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.4795
+[EXPERIMENT] GRAD_BLOCK_1 avg_last_steps=0.3661
+[EXPERIMENT] GRAD_BLOCK_2 avg_last_steps=0.3587
+[EXPERIMENT] GRAD_BLOCK_3 avg_last_steps=0.3808
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=0.1542 std=0.5665 max=1.1345 min=-1.1215
+[EXPERIMENT] PROBS max=0.2322 mean_conf=0.2302
+[EXPERIMENT] FEAT mean=0.1485 std=0.9891 range=[-2.7572, 3.0160]
+[EXPERIMENT] END label=depth=4
+
+[EXPERIMENT] === SEED REPRODUCIBILITY ===
+[EXPERIMENT] START label=seed=42 seed=42 depth=2 embed_dims=128 lr=0.0005
+[EXPERIMENT] PARAMS backbone=772113 head=1931
+[EXPERIMENT] RESULT label=seed=42 steps=2 final_loss=2.278446 final_acc=25.0 best_acc=25.0 mean_step_time=551.0ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.5751
+[EXPERIMENT] GRAD_BLOCK_1 avg_last_steps=0.4383
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=0.1753 std=0.4591 max=1.0274 min=-0.6788
+[EXPERIMENT] PROBS max=0.2129 mean_conf=0.2115
+[EXPERIMENT] FEAT mean=0.1501 std=0.9887 range=[-2.7125, 3.2653]
+[EXPERIMENT] END label=seed=42
+
+[EXPERIMENT] START label=seed=123 seed=123 depth=2 embed_dims=128 lr=0.0005
+[EXPERIMENT] PARAMS backbone=772113 head=1931
+[EXPERIMENT] RESULT label=seed=123 steps=2 final_loss=1.956231 final_acc=0.0 best_acc=0.0 mean_step_time=659.8ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.5134
+[EXPERIMENT] GRAD_BLOCK_1 avg_last_steps=0.4197
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=-0.1927 std=0.5526 max=0.6346 min=-1.1383
+[EXPERIMENT] PROBS max=0.1988 mean_conf=0.1975
+[EXPERIMENT] FEAT mean=0.0751 std=0.9975 range=[-3.2469, 2.8628]
+[EXPERIMENT] END label=seed=123
+
+[EXPERIMENT] START label=seed=456 seed=456 depth=2 embed_dims=128 lr=0.0005
+[EXPERIMENT] PARAMS backbone=772113 head=1931
+[EXPERIMENT] RESULT label=seed=456 steps=2 final_loss=2.485827 final_acc=0.0 best_acc=0.0 mean_step_time=568.7ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.5795
+[EXPERIMENT] GRAD_BLOCK_1 avg_last_steps=0.4243
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=-0.0504 std=0.4884 max=0.8782 min=-0.6816
+[EXPERIMENT] PROBS max=0.2233 mean_conf=0.2223
+[EXPERIMENT] FEAT mean=0.0648 std=0.9980 range=[-2.4678, 3.1300]
+[EXPERIMENT] END label=seed=456
+
+[EXPERIMENT] START label=seed=789 seed=789 depth=2 embed_dims=128 lr=0.0005
+[EXPERIMENT] PARAMS backbone=772113 head=1931
+[EXPERIMENT] RESULT label=seed=789 steps=2 final_loss=2.451320 final_acc=0.0 best_acc=0.0 mean_step_time=548.9ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.5649
+[EXPERIMENT] GRAD_BLOCK_1 avg_last_steps=0.4241
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=-0.2779 std=0.5320 max=0.3032 min=-1.1541
+[EXPERIMENT] PROBS max=0.1579 mean_conf=0.1572
+[EXPERIMENT] FEAT mean=0.1092 std=0.9942 range=[-2.8832, 2.6593]
+[EXPERIMENT] END label=seed=789
+
+[EXPERIMENT] === GRADIENT DIAGNOSTIC (depth=4) ===
+[EXPERIMENT] START label=grad-diag-depth4 seed=42 depth=4 embed_dims=128 lr=0.0005
+[EXPERIMENT] PARAMS backbone=1500177 head=1931
+[EXPERIMENT] RESULT label=grad-diag-depth4 steps=2 final_loss=2.299818 final_acc=25.0 best_acc=25.0 mean_step_time=960.3ms
+[EXPERIMENT] PLATEAU steps_below_50pct=2
+[EXPERIMENT] GRAD_BLOCK_0 avg_last_steps=0.4795
+[EXPERIMENT] GRAD_BLOCK_1 avg_last_steps=0.3661
+[EXPERIMENT] GRAD_BLOCK_2 avg_last_steps=0.3587
+[EXPERIMENT] GRAD_BLOCK_3 avg_last_steps=0.3808
+[EXPERIMENT] GRAD_HEALTH fraction_healthy=2/2
+[EXPERIMENT] LOGITS mean=0.1542 std=0.5665 max=1.1345 min=-1.1215
+[EXPERIMENT] PROBS max=0.2322 mean_conf=0.2302
+[EXPERIMENT] FEAT mean=0.1485 std=0.9891 range=[-2.7572, 3.0160]
+[EXPERIMENT] END label=grad-diag-depth4
+
 [EXPERIMENT] === NO-HEAD FEATURE SANITY ===
 [EXPERIMENT] NOHEAD shape=(4, 128, 6, 6)
-[EXPERIMENT] NOHEAD mean=0.078157 std=0.996968
-[EXPERIMENT] NOHEAD range=[-2.808869, 2.814563]
+[EXPERIMENT] NOHEAD mean=0.148789 std=0.988895
+[EXPERIMENT] NOHEAD range=[-2.586468, 3.206683]
 [EXPERIMENT] NOHEAD finite=True
-[EXPERIMENT] NOHEAD spatial_variance=0.132230
+[EXPERIMENT] NOHEAD spatial_variance=0.113460
 

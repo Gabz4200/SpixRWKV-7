@@ -1,90 +1,32 @@
 
 === Testing seed 3407 ===
-Input:  (1, 6, 512, 424)
+  Loaded image: class=butterfly, label=0
+Input:  (1, 6, 128, 128)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 128, 128)
 
 Total params: 9.15M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 42 ===
-Input:  (1, 6, 512, 424)
+  Loaded image: class=dolphin, label=2
+Input:  (1, 6, 128, 128)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 128, 128)
 
 Total params: 9.15M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 123 ===
-Input:  (1, 6, 512, 424)
+  Loaded image: class=butterfly, label=0
+Input:  (1, 6, 128, 128)
 Output levels:  1
-  level 0: (1, 192, 512, 424)
+  level 0: (1, 192, 128, 128)
 
 Total params: 9.15M
 All outputs finite: True
 Deterministic: True
 
 === Testing seed 456 ===
-Input:  (1, 6, 512, 424)
-Output levels:  1
-  level 0: (1, 192, 512, 424)
-
-Total params: 9.15M
-All outputs finite: True
-Deterministic: True
-
-=== Testing seed 789 ===
-Input:  (1, 6, 512, 424)
-Output levels:  1
-  level 0: (1, 192, 512, 424)
-
-Total params: 9.15M
-All outputs finite: True
-Deterministic: True
-
-=== Testing seed 1000 ===
-Input:  (1, 6, 512, 424)
-Output levels:  1
-  level 0: (1, 192, 512, 424)
-
-Total params: 9.15M
-All outputs finite: True
-Deterministic: True
-
-=== Testing seed 2000 ===
-Input:  (1, 6, 512, 424)
-Output levels:  1
-  level 0: (1, 192, 512, 424)
-
-Total params: 9.15M
-All outputs finite: True
-Deterministic: True
-
-=== Testing seed 3000 ===
-Input:  (1, 6, 512, 424)
-Output levels:  1
-  level 0: (1, 192, 512, 424)
-
-Total params: 9.15M
-All outputs finite: True
-Deterministic: True
-
-=== Testing seed 4000 ===
-Input:  (1, 6, 512, 424)
-Output levels:  1
-  level 0: (1, 192, 512, 424)
-
-Total params: 9.15M
-All outputs finite: True
-Deterministic: True
-
-=== Testing seed 5000 ===
-Input:  (1, 6, 512, 424)
-Output levels:  1
-  level 0: (1, 192, 512, 424)
-
-Total params: 9.15M
-All outputs finite: True
-Deterministic: True

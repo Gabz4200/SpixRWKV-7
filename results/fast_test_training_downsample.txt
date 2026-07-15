@@ -1,44 +1,39 @@
 
-=== Running gnn model with downsample_factor = 1.0 ===
+=== Running spix model with downsample_factor = 1.0 ===
 ========================================================================
   SpixRWKV-7 — Fast Convergence Test (single-batch overfit)
 ========================================================================
   Device         CPU
   Batch size     4
-  Image size     64x64
+  Image size     128x128
   Classes        10
   Embed dims     128
   Heads          2
   Depth          2
-  Superpixels    36
-  Downsample F   16
-  Total params   507,036
-  Train params   507,036
+  Superpixels    16
+  Downsample F   1.0
+  Total params   774,044
+  Train params   774,044
   Optimizer      AdamW (lr=0.0005, wd=0.0)
-  Max steps      80
+  Max steps      10
   Target acc     95%
 ------------------------------------------------------------------------
    Step      Loss     Acc  GradNorm  Time/step
 ------------------------------------------------------------------------
-      1    2.2262   25.0%      8.44     577.6ms
-      5    1.8103   25.0%      5.42     277.8ms
-     10    1.5470   25.0%      2.39     332.5ms
-     15    1.4553   25.0%      1.31     203.9ms
-     20    1.4119   50.0%      0.59     176.4ms
-     25    1.3904   50.0%      0.65     408.5ms
-     30    1.3719  100.0%      0.31     216.4ms
-
-  >>> Target accuracy 95% reached at step 30.
+      1    2.3964    0.0%     12.86     544.9ms
+      5    1.5098   75.0%      6.62     540.2ms
+     10    1.1582   50.0%      2.22     504.9ms
 ========================================================================
   Summary
 ========================================================================
-  Total time        7.5s
-  Steps run         30
-  Final loss        1.371934
-  Final accuracy    100.0%
-  Best accuracy     100.0%
-  Steps to 90%      30
-  Steps to 95%      30
+  Total time        5.9s
+  Steps run         10
+  Final loss        1.158235
+  Final accuracy    50.0%
+  Best accuracy     75.0%
+  Steps to 90%      not reached
+  Steps to 95%      not reached
 
-  RESULT: PASS — model overfits the batch (convergence OK)
+  RESULT: FAIL — best accuracy 75.0% < 95% target.
+  Possible issues: bug in architecture, bad LR, optimization setup.
 ========================================================================
