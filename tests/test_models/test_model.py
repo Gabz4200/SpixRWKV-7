@@ -15,6 +15,7 @@ from spixrwkv7.models.vq_rwkv7 import (
     VectorQuantizer,
     create_vq_rwkv7,
 )
+from tests.conftest import get_dummy_neighbors, TINY_CONFIG as _TINY_CONFIG
 
 # =====================================================================
 # Helper Functions
@@ -58,23 +59,8 @@ _TINY_VQ_CONFIG: VQModelConfig = {
     "in_chans": 6,
 }
 
-def get_dummy_neighbors(B, N, K=4):
-    """Helper to create dummy valid neighbors for testing blocks."""
-    offsets = torch.arange(1, K + 1).unsqueeze(0)  # [1, K]
-    neighbors = (torch.arange(N).unsqueeze(1) + offsets) % N  # [N, K]
-    return neighbors.unsqueeze(0).expand(B, -1, -1)  # [B, N, K]
-
 
     # Common small model configs to reduce duplication across tests
-_TINY_CONFIG: ModelConfig = {
-    "img_size": 32,
-    "embed_dims": 64,
-    "num_heads": 1,
-    "depth": 1,
-    "num_superpixels": 9,
-    "diff_slic_iters": 2,
-    "in_chans": 6,
-}
 _SMALL_CONFIG: ModelConfig = {
     "img_size": 64,
     "embed_dims": 64,
