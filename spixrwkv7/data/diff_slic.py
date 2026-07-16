@@ -11,8 +11,10 @@ import torch.nn.functional as F
 # Helper functions
 # =====================================================================
 
-# Filler value for masked positions in softmax (finite to avoid NaN when all positions are masked)
-FILLER = -1e9
+# Filler value for masked positions in softmax (finite to avoid NaN when all
+# positions are masked).  Must fit in float16 range (~65504) because AMP autocast
+# casts similarities to half precision on CUDA; -1e9 caused RuntimeError overflow.
+FILLER = -6e4
 
 # Set once when the C++ diff_slic kernel is unavailable, so the PyTorch
 # fallback warns exactly once instead of on every property access.
