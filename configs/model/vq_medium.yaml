@@ -22,7 +22,8 @@ model:
   beta: 0.25
   norm_layer: rmsnorm
   act_layer: swiglu
-  use_attnres: false
+  use_attnres: true
+  use_cpp: true
   attnres_mode: block
   attnres_gate_type: bias
   attnres_num_blocks: 8

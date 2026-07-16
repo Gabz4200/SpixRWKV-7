@@ -36,8 +36,9 @@ model:
   spixel_backend: diff_slic
   norm_layer: rmsnorm
   act_layer: swiglu
-  use_cpp: false
-  downsample_factor: 16
+  use_cpp: true
+  use_attnres: true
+  downsample_factor: 4
   dedup_neighbors: true
   dedup_centroids: true
   gnn_conv: gatv2

@@ -2,7 +2,7 @@
 # Matched to ViT-Small parameter count for fair architecture comparison.
 # VQ-VAE tokenizer adds ~4M params (encoder + decoder + codebook).
 model:
-  img_size: 1024
+  img_size: 512
   embed_dims: 320
   num_heads: 5
   depth: 6
@@ -22,7 +22,8 @@ model:
   beta: 0.25
   norm_layer: rmsnorm
   act_layer: swiglu
-  use_attnres: false
+  use_attnres: true
+  use_cpp: true
   attnres_mode: block
   attnres_gate_type: bias
   attnres_num_blocks: 8

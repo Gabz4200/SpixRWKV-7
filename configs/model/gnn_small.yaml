@@ -32,8 +32,9 @@ model:
   spixel_backend: diff_slic
   norm_layer: rmsnorm
   act_layer: swiglu
-  use_cpp: false
-  downsample_factor: 16
+  use_cpp: true
+  use_attnres: true
+  downsample_factor: 4
   gnn_conv: gatv2
   gnn_heads: 4
   gnn_aggr: mean

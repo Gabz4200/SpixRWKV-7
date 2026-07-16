@@ -14,7 +14,7 @@
 # - register_edge_weight_scale=0.5: 4 registers on 256 nodes (~1.5% per
 #   register) create mild hub effect.  0.5× keeps registers useful.
 model:
-  img_size: 1024
+  img_size: -1
   embed_dims: 640
   num_heads: 10
   depth: 12
@@ -35,13 +35,14 @@ model:
   spixel_backend: diff_slic
   norm_layer: rmsnorm
   act_layer: swiglu
-  use_cpp: false
-  downsample_factor: 16
+  use_cpp: true
+  downsample_factor: 6
   dedup_neighbors: true
   dedup_centroids: true
+  use_attnres: true
   gnn_conv: gatv2
   gnn_heads: 4
-  gnn_aggr: mean
+  gnn_aggr: sum
   jk: lstm
   register_edge_weight_scale: 0.5
   use_jit: false

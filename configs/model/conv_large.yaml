@@ -22,12 +22,12 @@ model:
   norm_layer: rmsnorm
   act_layer: swiglu
   spixel_backend: diff_slic
-  use_attnres: false
+  use_attnres: true
   attnres_mode: block
   attnres_gate_type: bias
   attnres_num_blocks: 8
   attnres_recency_bias_init: 10.0
-  use_cpp: false
+  use_cpp: true
   use_jit: false
   conv_stem_channels: [96, 192, 384]
   conv_stem_kernel_sizes: [3, 5, 5]
