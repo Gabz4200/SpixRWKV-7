@@ -18,11 +18,14 @@ def _ensure_cpp():
     global _C, _FAKES_REGISTERED
     if _C is not None:
         return
-    from . import _C as _cpp  # type: ignore[attr-defined]
-    _C = _cpp
-    if not _FAKES_REGISTERED:
-        _register_fakes()
-        _FAKES_REGISTERED = True
+    try:
+        from . import _C as _cpp  # type: ignore[attr-defined]
+        _C = _cpp
+        if not _FAKES_REGISTERED:
+            _register_fakes()
+            _FAKES_REGISTERED = True
+    except ImportError:
+        _C = None
 
 def _register_fakes():
     """Register FakeTensor kernels for torch.compile support."""
